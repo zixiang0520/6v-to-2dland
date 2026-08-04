@@ -112,6 +112,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/auth/poll", s.requireAuth(s.authPoll))
 	mux.HandleFunc("POST /api/auth/logout", s.requireAuth(s.authLogout))
 	mux.HandleFunc("GET /api/search", s.requireAuth(s.search))
+	mux.HandleFunc("GET /api/home", s.requireAuth(s.home))
 	mux.HandleFunc("GET /api/magnets", s.requireAuth(s.magnets))
 	mux.HandleFunc("POST /api/push", s.requireAuth(s.push))
 	mux.HandleFunc("GET /api/tasks", s.requireAuth(s.tasks))

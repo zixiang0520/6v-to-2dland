@@ -455,3 +455,16 @@ func (s *Server) filesDelete(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
+
+// ---------- 首页推荐（发现页：各分类前 100 条） ----------
+
+func (s *Server) home(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	cats, err := s.site.FetchBrowse(ctx, 100)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, cats)
+}

@@ -203,6 +203,80 @@ textarea.input { resize: vertical; min-height: 70px; }
 }
 .section-title:first-child { margin-top: 0; padding-top: 0; border-top: none; }
 
+/* ============ 发现（各分类卡片浏览） ============ */
+.home-tabs {
+  display: flex; gap: 8px; flex-wrap: wrap;
+  margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--border);
+}
+.home-tab {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border-radius: 999px; font-size: 13px; font-weight: 500;
+  background: var(--surface); color: var(--text-muted); border: 1px solid var(--border);
+  cursor: pointer; transition: all .15s; white-space: nowrap;
+}
+.home-tab:hover { border-color: var(--primary-border); color: var(--primary); }
+.home-tab.active { background: var(--gradient); color: #fff; border-color: transparent; box-shadow: 0 2px 8px -2px rgba(99,102,241,.5); }
+.home-tab-count {
+  min-width: 20px; padding: 0 6px; border-radius: 999px;
+  font-size: 11px; font-weight: 600; background: var(--surface-3); color: var(--text-muted);
+}
+.home-tab.active .home-tab-count { background: rgba(255,255,255,.25); color: #fff; }
+
+.home-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(158px, 1fr));
+  gap: 16px;
+}
+.home-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  cursor: pointer;
+  transition: transform .15s, box-shadow .15s, border-color .15s;
+}
+.home-card:hover {
+  transform: translateY(-3px);
+  border-color: var(--primary-border);
+  box-shadow: var(--shadow-md);
+}
+.home-card:active { transform: translateY(-1px); }
+.home-cover {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 2 / 3;
+  background: var(--gradient-soft);
+  overflow: hidden;
+  display: flex; align-items: center; justify-content: center;
+}
+.home-card:hover .home-cover { filter: brightness(1.05); }
+/* 列表页无封面图，用标题首字占位，更美观且能区分卡片 */
+.cover-letter {
+  font-size: 40px; font-weight: 700; color: var(--primary); opacity: .65; line-height: 1;
+}
+.home-cat {
+  position: absolute; left: 8px; bottom: 8px;
+  padding: 2px 9px; border-radius: 999px; font-size: 11px; font-weight: 600;
+  background: rgba(15,23,42,.62); color: #fff; backdrop-filter: blur(4px);
+}
+.home-title {
+  padding: 9px 11px 11px;
+  font-size: 13px; line-height: 1.45;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden; text-overflow: ellipsis;
+  min-height: 42px;
+}
+.loading-box {
+  grid-column: 1 / -1;
+  padding: 40px 16px; text-align: center; color: var(--text-muted); font-size: 13px;
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+}
+@media (max-width: 640px) {
+  .home-grid { grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 12px; }
+  .home-title { font-size: 12px; }
+  .cover-letter { font-size: 32px; }
+}
+
 /* ============ 搜索视图 ============ */
 .search-bar { display: flex; gap: 10px; margin-bottom: 18px; }
 .search-bar .input { flex: 1; font-size: 15px; padding: 11px 14px; }

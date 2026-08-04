@@ -54,6 +54,9 @@
     fileCwd: '/',          // 文件管理当前目录路径
     fileSel: new Set(),    // 选中的文件 identity
     fileItems: [],          // 当前目录文件列表
+    homeCats: [],           // 6v520 各分类前 N 条 [{category,name,items}]
+    homeActiveCat: null,    // 当前选中的分类目录名
+    pendingHome: null,      // 从发现页点击跳转到搜索页时携带的 {title,url,category}
     theme: 'auto',
     pollTimer: null,
     taskRefreshTimer: null,  // 任务页自动刷新定时器
@@ -105,7 +108,7 @@
 
   function onHash() {
     const h = location.hash.slice(1);
-    state.view = ['search', 'tasks', 'files', 'settings'].includes(h) ? h : 'search';
+    state.view = ['home', 'search', 'tasks', 'files', 'settings'].includes(h) ? h : 'home';
     render();
   }
 
@@ -127,7 +130,8 @@
     const c = $('#content');
     if (!c) return;
     if (state.view !== 'tasks') stopTaskAutoRefresh();
-    if (state.view === 'tasks') { c.innerHTML = viewTasks(); bindTasks(); loadTasks(); }
+    if (state.view === 'home') { c.innerHTML = viewHome(); bindHome(); loadHome(); }
+    else if (state.view === 'tasks') { c.innerHTML = viewTasks(); bindTasks(); loadTasks(); }
     else if (state.view === 'files') { c.innerHTML = viewFiles(); bindFiles(); loadFiles(); }
     else if (state.view === 'settings') { c.innerHTML = viewSettingsLoading(); loadSettings(); }
     else { c.innerHTML = viewSearch(); bindSearch(); renderSelected(); }
@@ -214,7 +218,7 @@
       toast('初始化完成，欢迎使用！', 'success');
       state.uiSession = { auth_required: true, logged_in: true };
       await refreshAuth();
-      location.hash = 'search';
+      location.hash = 'home';
       render();
     };
   }
@@ -233,6 +237,7 @@
       <header class="topbar">
         <div class="brand"><span class="mark">6v</span><span>6v → 2dland</span></div>
         <nav class="nav">
+          <a class="nav-item ${state.view === 'home' ? 'active' : ''}" href="#home">🏠 发现</a>
           <a class="nav-item ${state.view === 'search' ? 'active' : ''}" href="#search">🔍 搜索</a>
           <a class="nav-item ${state.view === 'tasks' ? 'active' : ''}" href="#tasks">📋 任务</a>
           <a class="nav-item ${state.view === 'files' ? 'active' : ''}" href="#files">📂 文件</a>
@@ -258,6 +263,75 @@
     };
   }
 
+  // ============ 视图：发现（6v520 各分类前 100 条） ============
+  function viewHome() {
+    return `
+    <div class="page-head">
+      <div><h2>发现</h2><div class="desc">浏览 6v520 各分类的最新资源，点击卡片直达磁力链</div></div>
+      <button class="btn" id="btnRefreshHome">⟳ 刷新</button>
+    </div>
+    <div id="homeTabs" class="home-tabs"></div>
+    <div id="homeGrid" class="home-grid"><div class="loading-box"><span class="spinner"></span> 正在抓取各分类资源（11 分类并发，约 5~10 秒）…</div></div>`;
+  }
+  function bindHome() {
+    const btn = $('#btnRefreshHome');
+    if (btn) btn.onclick = loadHome;
+  }
+  async function loadHome() {
+    const grid = $('#homeGrid'), tabs = $('#homeTabs');
+    if (grid) grid.innerHTML = '<div class="loading-box"><span class="spinner"></span> 正在抓取各分类资源（11 分类并发，约 5~10 秒）…</div>';
+    if (tabs) tabs.innerHTML = '';
+    const { ok, data } = await api.get('/api/home');
+    if (!ok) { if (grid) grid.innerHTML = `<div class="empty"><div class="ico">⚠️</div>${esc(data.error || '加载失败')}</div>`; return; }
+    state.homeCats = data || [];
+    if (!state.homeCats.length) { if (grid) grid.innerHTML = '<div class="empty"><div class="ico">📭</div>未抓取到内容</div>'; return; }
+    if (state.homeActiveCat == null || !state.homeCats.some(c => c.category === state.homeActiveCat)) {
+      state.homeActiveCat = state.homeCats[0].category;
+    }
+    renderHomeTabs();
+    renderHomeGrid();
+  }
+  function renderHomeTabs() {
+    const tabs = $('#homeTabs');
+    if (!tabs) return;
+    tabs.innerHTML = state.homeCats.map(c =>
+      `<button class="home-tab ${c.category === state.homeActiveCat ? 'active' : ''}" data-cat="${esc(c.category)}">${esc(c.name)}<span class="home-tab-count">${c.items.length}</span></button>`
+    ).join('');
+    $$('.home-tab').forEach(b => b.onclick = () => {
+      if (state.homeActiveCat === b.dataset.cat) return;
+      state.homeActiveCat = b.dataset.cat;
+      renderHomeTabs();
+      renderHomeGrid();
+    });
+  }
+  function renderHomeGrid() {
+    const grid = $('#homeGrid');
+    if (!grid) return;
+    const cat = state.homeCats.find(c => c.category === state.homeActiveCat);
+    if (!cat) { grid.innerHTML = ''; return; }
+    const items = cat.items || [];
+    if (!items.length) { grid.innerHTML = '<div class="empty"><div class="ico">📭</div>该分类暂无内容</div>'; return; }
+    // 列表页无封面图：用标题首字占位，更美观且区分卡片
+    grid.innerHTML = items.map((it, i) => {
+      const initial = (it.title || '?').replace(/[《》「」]/g, '').trim().slice(0, 1) || '?';
+      const dateShort = it.date ? it.date.slice(5) : ''; // MM-DD
+      return `<div class="home-card" data-idx="${i}" title="${esc(it.title)}">
+        <div class="home-cover"><span class="cover-letter">${esc(initial)}</span>${dateShort ? `<span class="home-cat">${esc(dateShort)}</span>` : ''}</div>
+        <div class="home-title">${esc(it.title)}</div>
+      </div>`;
+    }).join('');
+    $$('.home-card').forEach(el => el.onclick = () => clickHome(+el.dataset.idx));
+  }
+  // clickHome：点击发现页卡片 → 跳转搜索页 → 自动用标题搜索并展开磁力链。
+  function clickHome(i) {
+    const cat = state.homeCats.find(c => c.category === state.homeActiveCat);
+    if (!cat) return;
+    const it = cat.items[i];
+    if (!it) return;
+    state.pendingHome = { title: it.title, url: it.url, category: it.category };
+    location.hash = 'search';
+  }
+
   // ============ 视图：搜索 ============
   function viewSearch() {
     return `
@@ -278,22 +352,35 @@
   function bindSearch() {
     $('#btnSearch').onclick = doSearch;
     $('#kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+    // 来自发现页的跳转：自动用卡片标题搜索并展开磁力链
+    if (state.pendingHome) {
+      const kw = $('#kw');
+      if (kw) kw.value = state.pendingHome.title;
+      doSearch();
+    }
   }
   async function doSearch() {
     const q = $('#kw').value.trim();
     if (!q) return;
     const hint = $('#searchHint'), res = $('#results'), btn = $('#btnSearch');
     btn.disabled = true;
-    hint.innerHTML = '<span class="spinner"></span> 搜索中（全分类并发爬取，约需数十秒）…';
+    hint.innerHTML = '<span class="spinner"></span> 搜索中（站内搜索，通常 1~2 秒）…';
     res.innerHTML = '';
     const { ok, data } = await api.get('/api/search?q=' + encodeURIComponent(q));
     btn.disabled = false;
     hint.textContent = '';
     if (!ok) { res.innerHTML = `<div class="empty"><div class="ico">⚠️</div>${esc(data.error || '搜索失败')}</div>`; return; }
-    if (!data || !data.length) { res.innerHTML = '<div class="empty"><div class="ico">🔍</div>未找到匹配资源</div>'; return; }
-    state.lastResults = data;
-    hint.textContent = `找到 ${data.length} 条结果，点击「查看磁力链」展开`;
-    res.innerHTML = data.map((r, i) => `
+    let results = data || [];
+    // 发现页跳转：若搜索结果未包含卡片 URL，插入到头部以便展开磁力链
+    const pending = state.pendingHome;
+    state.pendingHome = null;
+    if (pending && pending.url && !results.some(r => r.url === pending.url)) {
+      results = [{ title: pending.title, url: pending.url, category: pending.category, date: '' }, ...results];
+    }
+    if (!results.length) { res.innerHTML = '<div class="empty"><div class="ico">🔍</div>未找到匹配资源</div>'; return; }
+    state.lastResults = results;
+    hint.textContent = `找到 ${results.length} 条结果，点击「查看磁力链」展开`;
+    res.innerHTML = results.map((r, i) => `
       <div class="result">
         <div class="result-head">
           ${r.date ? `<span class="tag date">${esc(r.date)}</span>` : ''}
@@ -304,6 +391,11 @@
         <div class="result-body" id="mags-${i}"></div>
       </div>`).join('');
     $$('[data-mag]').forEach(b => b.onclick = () => toggleMags(+b.dataset.mag));
+    // 自动展开来自发现页的卡片磁力链
+    if (pending && pending.url) {
+      const idx = results.findIndex(r => r.url === pending.url);
+      if (idx >= 0) toggleMags(idx);
+    }
   }
   async function toggleMags(i) {
     const box = $('#mags-' + i), btn = $(`[data-mag="${i}"]`);
