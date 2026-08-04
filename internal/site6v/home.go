@@ -22,17 +22,31 @@ func categoryCNName(cat string) string {
 	return cat
 }
 
-// FetchBrowse 并发抓取所有分类的列表页，每个分类取前 perCategory 条。
-// 用于发现页：按分类浏览 6v520 的资源（列表页无封面图，前端用首字母占位）。
-// 11 个分类并发爬取，单分类内串行翻页直到收够 perCategory 条或无更多页。
-func (c *Client) FetchBrowse(ctx context.Context, perCategory int) ([]BrowseCategory, error) {
+// FetchBrowse 抓取分类的列表页，每个分类取前 perCategory 条。
+// 用于发现页：按分类浏览 6v520 的资源（列表页无封面图，前端用文字列表展示）。
+//   - cat 为空：并发爬取全部 11 个分类（首屏，perCategory 默认 20）。
+//   - cat 非空：仅爬取该分类（用户点击分类标签后展开，perCategory 默认 100）。
+//
+// 单分类内串行翻页直到收够 perCategory 条或无更多页。
+func (c *Client) FetchBrowse(ctx context.Context, perCategory int, cat string) ([]BrowseCategory, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
+	// 默认条数：首屏（全部分类）20 条，单分类展开 100 条
 	if perCategory <= 0 {
-		perCategory = 100
+		if cat == "" {
+			perCategory = 20
+		} else {
+			perCategory = 100
+		}
+	}
+
+	// 选择要爬取的分类列表
+	cats := categories
+	if cat != "" {
+		cats = []string{cat}
 	}
 
 	type result struct {
@@ -40,8 +54,8 @@ func (c *Client) FetchBrowse(ctx context.Context, perCategory int) ([]BrowseCate
 		items []HomeItem
 	}
 	var wg sync.WaitGroup
-	ch := make(chan result, len(categories))
-	for _, cat := range categories {
+	ch := make(chan result, len(cats))
+	for _, c2 := range cats {
 		wg.Add(1)
 		go func(cat string) {
 			defer wg.Done()
@@ -56,27 +70,37 @@ func (c *Client) FetchBrowse(ctx context.Context, perCategory int) ([]BrowseCate
 				})
 			}
 			ch <- result{cat, items}
-		}(cat)
+		}(c2)
 	}
 	wg.Wait()
 	close(ch)
 
 	// 按 categories 原始顺序输出，跳过空分类
-	byCat := make(map[string][]HomeItem, len(categories))
+	byCat := make(map[string][]HomeItem, len(cats))
 	for r := range ch {
 		byCat[r.cat] = r.items
 	}
-	out := make([]BrowseCategory, 0, len(categories))
-	for _, cat := range categories {
-		items := byCat[cat]
+	out := make([]BrowseCategory, 0, len(cats))
+	for _, c2 := range categories {
+		items := byCat[c2]
 		if len(items) == 0 {
 			continue
 		}
 		out = append(out, BrowseCategory{
-			Category: cat,
-			Name:     categoryCNName(cat),
+			Category: c2,
+			Name:     categoryCNName(c2),
 			Items:    items,
 		})
+	}
+	// 单分类请求时直接按抓取结果输出（避免 cat 不在 categories 时返回空）
+	if cat != "" && len(out) == 0 {
+		if items := byCat[cat]; len(items) > 0 {
+			out = append(out, BrowseCategory{
+				Category: cat,
+				Name:     categoryCNName(cat),
+				Items:    items,
+			})
+		}
 	}
 	return out, nil
 }

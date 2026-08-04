@@ -54,8 +54,9 @@
     fileCwd: '/',          // 文件管理当前目录路径
     fileSel: new Set(),    // 选中的文件 identity
     fileItems: [],          // 当前目录文件列表
-    homeCats: [],           // 6v520 各分类前 N 条 [{category,name,items}]
+    homeCats: [],           // 6v520 各分类条目 [{category,name,items}]
     homeActiveCat: null,    // 当前选中的分类目录名
+    homeLoadedCats: new Set(), // 已展开到 100 条的分类（避免重复请求）
     pendingHome: null,      // 从发现页点击跳转到搜索页时携带的 {title,url,category}
     theme: 'auto',
     pollTimer: null,
@@ -263,20 +264,28 @@
     };
   }
 
-  // ============ 视图：发现（6v520 各分类前 100 条） ============
+  // ============ 视图：发现（6v520 各分类列表，纯文字） ============
+  // 抓取策略：首屏 GET /api/home 拿所有分类各 20 条概览；
+  // 用户点击某个分类标签时，再 GET /api/home?cat=xxx 拉取该分类前 100 条完整列表。
   function viewHome() {
     return `
     <div class="page-head">
-      <div><h2>发现</h2><div class="desc">浏览 6v520 各分类的最新资源，点击卡片直达磁力链</div></div>
+      <div><h2>发现</h2><div class="desc">浏览 6v520 各分类最新资源，点击标题直达磁力链</div></div>
       <button class="btn" id="btnRefreshHome">⟳ 刷新</button>
     </div>
     <div id="homeTabs" class="home-tabs"></div>
-    <div id="homeGrid" class="home-grid"><div class="loading-box"><span class="spinner"></span> 正在抓取各分类资源（11 分类并发，约 5~10 秒）…</div></div>`;
+    <div id="homeGrid" class="home-list"><div class="loading-box"><span class="spinner"></span> 正在抓取各分类资源（11 分类并发，约 5~10 秒）…</div></div>`;
   }
   function bindHome() {
     const btn = $('#btnRefreshHome');
-    if (btn) btn.onclick = loadHome;
+    if (btn) btn.onclick = () => {
+      // 手动刷新：清空已加载的完整分类标记，重新走首屏
+      state.homeLoadedCats = new Set();
+      state.homeActiveCat = null;
+      loadHome();
+    };
   }
+  // loadHome：首屏加载所有分类的概览（每分类 20 条）。
   async function loadHome() {
     const grid = $('#homeGrid'), tabs = $('#homeTabs');
     if (grid) grid.innerHTML = '<div class="loading-box"><span class="spinner"></span> 正在抓取各分类资源（11 分类并发，约 5~10 秒）…</div>';
@@ -284,12 +293,38 @@
     const { ok, data } = await api.get('/api/home');
     if (!ok) { if (grid) grid.innerHTML = `<div class="empty"><div class="ico">⚠️</div>${esc(data.error || '加载失败')}</div>`; return; }
     state.homeCats = data || [];
+    state.homeLoadedCats = new Set(); // 记录已展开到 100 条的分类
     if (!state.homeCats.length) { if (grid) grid.innerHTML = '<div class="empty"><div class="ico">📭</div>未抓取到内容</div>'; return; }
     if (state.homeActiveCat == null || !state.homeCats.some(c => c.category === state.homeActiveCat)) {
       state.homeActiveCat = state.homeCats[0].category;
     }
     renderHomeTabs();
     renderHomeGrid();
+    // 首屏默认展开第一个分类的完整列表
+    expandHomeCat(state.homeActiveCat);
+  }
+  // expandHomeCat：点击分类标签时拉取该分类前 100 条。
+  // 已加载过的分类不重复请求；首屏的 20 条会先展示，加载完成后再替换为 100 条。
+  async function expandHomeCat(cat) {
+    if (!cat) return;
+    if (state.homeLoadedCats && state.homeLoadedCats.has(cat)) {
+      renderHomeGrid();
+      return;
+    }
+    // 先展示首屏已有的 20 条（避免空白），加加载提示
+    renderHomeGrid(true);
+    const { ok, data } = await api.get('/api/home?cat=' + encodeURIComponent(cat));
+    if (!ok) { toast(data.error || '加载分类失败', 'warn'); return; }
+    const arr = data || [];
+    if (arr.length) {
+      // 用 100 条结果替换该分类的 20 条
+      const idx = state.homeCats.findIndex(c => c.category === cat);
+      if (idx >= 0) state.homeCats[idx].items = arr[0].items;
+    }
+    if (!state.homeLoadedCats) state.homeLoadedCats = new Set();
+    state.homeLoadedCats.add(cat);
+    // 仅当用户仍停留在该分类时才刷新视图
+    if (state.homeActiveCat === cat) renderHomeGrid();
   }
   function renderHomeTabs() {
     const tabs = $('#homeTabs');
@@ -301,28 +336,29 @@
       if (state.homeActiveCat === b.dataset.cat) return;
       state.homeActiveCat = b.dataset.cat;
       renderHomeTabs();
-      renderHomeGrid();
+      // 点击分类标签 → 拉取该分类前 100 条
+      expandHomeCat(state.homeActiveCat);
     });
   }
-  function renderHomeGrid() {
+  // renderHomeGrid：纯文字列表，每行显示日期 + 标题。
+  // loading=true 时在底部追加加载提示（已展开分类的 100 条正在拉取）。
+  function renderHomeGrid(loading) {
     const grid = $('#homeGrid');
     if (!grid) return;
     const cat = state.homeCats.find(c => c.category === state.homeActiveCat);
     if (!cat) { grid.innerHTML = ''; return; }
     const items = cat.items || [];
     if (!items.length) { grid.innerHTML = '<div class="empty"><div class="ico">📭</div>该分类暂无内容</div>'; return; }
-    // 列表页无封面图：用标题首字占位，更美观且区分卡片
     grid.innerHTML = items.map((it, i) => {
-      const initial = (it.title || '?').replace(/[《》「」]/g, '').trim().slice(0, 1) || '?';
-      const dateShort = it.date ? it.date.slice(5) : ''; // MM-DD
-      return `<div class="home-card" data-idx="${i}" title="${esc(it.title)}">
-        <div class="home-cover"><span class="cover-letter">${esc(initial)}</span>${dateShort ? `<span class="home-cat">${esc(dateShort)}</span>` : ''}</div>
-        <div class="home-title">${esc(it.title)}</div>
+      const d = it.date ? it.date.slice(5) : ''; // MM-DD
+      return `<div class="home-row" data-idx="${i}" title="${esc(it.title)}">
+        ${d ? `<span class="home-date">${esc(d)}</span>` : ''}
+        <span class="home-text">${esc(it.title)}</span>
       </div>`;
-    }).join('');
-    $$('.home-card').forEach(el => el.onclick = () => clickHome(+el.dataset.idx));
+    }).join('') + (loading ? '<div class="loading-box"><span class="spinner"></span> 正在加载该分类前 100 条…</div>' : '');
+    $$('.home-row').forEach(el => el.onclick = () => clickHome(+el.dataset.idx));
   }
-  // clickHome：点击发现页卡片 → 跳转搜索页 → 自动用标题搜索并展开磁力链。
+  // clickHome：点击发现页条目 → 跳转搜索页 → 自动用标题搜索并展开磁力链。
   function clickHome(i) {
     const cat = state.homeCats.find(c => c.category === state.homeActiveCat);
     if (!cat) return;

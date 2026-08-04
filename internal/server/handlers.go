@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"time"
 
 	"6v-to-2dland/internal/cfg"
@@ -456,12 +457,32 @@ func (s *Server) filesDelete(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// ---------- 首页推荐（发现页：各分类前 100 条） ----------
+// ---------- 发现页（各分类列表） ----------
+//
+// 查询参数：
+//   - cat:   指定分类目录名（如 dy/dlz）。为空时并发抓取所有分类（首屏，每分类前 20 条）。
+//   - limit: 覆盖默认条数。cat 为空时默认 20，cat 非空时默认 100。
+//
+// 前端用法：首屏 GET /api/home（拿到 11 个分类各 20 条的概览，用于展示分类标签）；
+// 用户点击某个分类标签时再 GET /api/home?cat=xxx 拉取该分类前 100 条完整列表。
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	q := r.URL.Query()
+	cat := q.Get("cat")
+	limit := 0
+	if v := q.Get("limit"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 {
+			limit = n
+		}
+	}
+	// 首屏全分类抓取超时放宽到 90s；单分类展开通常 3~8s
+	timeout := 90 * time.Second
+	if cat != "" {
+		timeout = 30 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), timeout)
 	defer cancel()
-	cats, err := s.site.FetchBrowse(ctx, 100)
+	cats, err := s.site.FetchBrowse(ctx, limit, cat)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errResp(err))
 		return
