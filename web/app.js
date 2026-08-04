@@ -68,6 +68,7 @@
     theme: 'auto',
     pollTimer: null,
     taskRefreshTimer: null,  // 任务页自动刷新定时器
+    homeRefreshTimer: null,  // 发现页自动刷新定时器
   };
 
   // ============ 主题 ============
@@ -138,7 +139,12 @@
     const c = $('#content');
     if (!c) return;
     if (state.view !== 'tasks') stopTaskAutoRefresh();
-    if (state.view === 'home') { c.innerHTML = viewHome(); bindHome(); loadHome(); }
+    if (state.view !== 'home') stopHomeAutoRefresh();
+    if (state.view === 'home') {
+      c.innerHTML = viewHome(); bindHome();
+      // 不自动刷新：有缓存直接显示上次内容，无缓存显示引导提示等用户点刷新
+      if (state.homeCats.length) { renderHomeTabs(); renderHomeGrid(); }
+    }
     else if (state.view === 'tasks') { c.innerHTML = viewTasks(); bindTasks(); loadTasks(); }
     else if (state.view === 'files') { c.innerHTML = viewFiles(); bindFiles(); loadFiles(); }
     else if (state.view === 'settings') { c.innerHTML = viewSettingsLoading(); loadSettings(); }
@@ -274,21 +280,30 @@
       state.uiSession = { auth_required: true, logged_in: false };
       state.selected.clear();
       stopTaskAutoRefresh();
+      stopHomeAutoRefresh();
       render();
     };
   }
 
   // ============ 视图：发现（6v520 各分类列表，纯文字） ============
-  // 抓取策略：首屏 GET /api/home 拿所有分类各 20 条概览；
-  // 用户点击某个分类标签时，再 GET /api/home?cat=xxx 拉取该分类前 100 条完整列表。
+  // 抓取策略：GET /api/home 一次拉满所有分类各前 100 条。
+  // 刷新策略：不自动刷新；进入页显示上次缓存，手动点「刷新」或开启「定时刷新」按分钟自动拉取。
   function viewHome() {
+    const arOn = localStorage.getItem('home_auto_refresh') === '1';
+    const arMin = parseInt(localStorage.getItem('home_refresh_min')) || 5;
     return `
     <div class="page-head">
       <div><h2>发现</h2><div class="desc">浏览 6v520 各分类最新资源，点击标题直达磁力链</div></div>
-      <button class="btn" id="btnRefreshHome">⟳ 刷新</button>
+      <div class="row gap-sm">
+        <label class="auto-refresh" title="开启后按设定分钟数自动刷新发现页">
+          <input type="checkbox" id="homeAutoRefresh" ${arOn ? 'checked' : ''}> 定时刷新
+          <input type="number" id="homeRefreshMin" class="input-num" value="${arMin}" min="1" max="1440"> 分钟
+        </label>
+        <button class="btn" id="btnRefreshHome">⟳ 刷新</button>
+      </div>
     </div>
     <div id="homeTabs" class="home-tabs"></div>
-    <div id="homeGrid" class="home-list"><div class="loading-box"><span class="spinner"></span> 正在抓取各分类资源（11 分类并发，约 5~10 秒）…</div></div>`;
+    <div id="homeGrid" class="home-list"><div class="empty"><div class="ico">📥</div>点击右上角「⟳ 刷新」加载最新资源</div></div>`;
   }
   function bindHome() {
     const btn = $('#btnRefreshHome');
@@ -296,14 +311,31 @@
       state.homeActiveCat = null;
       loadHome();
     };
+    const cb = $('#homeAutoRefresh'), min = $('#homeRefreshMin');
+    if (cb) cb.onchange = () => { localStorage.setItem('home_auto_refresh', cb.checked ? '1' : '0'); startHomeAutoRefresh(); };
+    if (min) min.onchange = () => { const v = Math.max(1, parseInt(min.value) || 5); min.value = v; localStorage.setItem('home_refresh_min', String(v)); startHomeAutoRefresh(); };
+    startHomeAutoRefresh();
+  }
+  // 定时刷新：按设定分钟数静默拉取（不闪屏）；离开发现页或退出登录时停止。
+  function startHomeAutoRefresh() {
+    stopHomeAutoRefresh();
+    if (localStorage.getItem('home_auto_refresh') !== '1') return;
+    const min = Math.max(1, parseInt(localStorage.getItem('home_refresh_min')) || 5);
+    state.homeRefreshTimer = setInterval(() => loadHome(true), min * 60 * 1000);
+  }
+  function stopHomeAutoRefresh() {
+    if (state.homeRefreshTimer) { clearInterval(state.homeRefreshTimer); state.homeRefreshTimer = null; }
   }
   // loadHome：并发抓取所有分类，每分类前 100 条（一次拉满，无二次请求）。
-  async function loadHome() {
+  // silent=true 时为定时刷新：不显示 loading、不重置分类标签，避免闪屏。
+  async function loadHome(silent) {
     const grid = $('#homeGrid'), tabs = $('#homeTabs');
-    if (grid) grid.innerHTML = '<div class="loading-box"><span class="spinner"></span> 正在抓取各分类前 100 条（11 分类并发，约 10~20 秒）…</div>';
-    if (tabs) tabs.innerHTML = '';
+    if (!silent) {
+      if (grid) grid.innerHTML = '<div class="loading-box"><span class="spinner"></span> 正在抓取各分类前 100 条（11 分类并发，约 10~20 秒）…</div>';
+      if (tabs) tabs.innerHTML = '';
+    }
     const { ok, data } = await api.get('/api/home');
-    if (!ok) { if (grid) grid.innerHTML = `<div class="empty"><div class="ico">⚠️</div>${esc(data.error || '加载失败')}</div>`; return; }
+    if (!ok) { if (!silent && grid) grid.innerHTML = `<div class="empty"><div class="ico">⚠️</div>${esc(data.error || '加载失败')}</div>`; return; }
     state.homeCats = data || [];
     if (!state.homeCats.length) { if (grid) grid.innerHTML = '<div class="empty"><div class="ico">📭</div>未抓取到内容</div>'; return; }
     if (state.homeActiveCat == null || !state.homeCats.some(c => c.category === state.homeActiveCat)) {
