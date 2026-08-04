@@ -54,9 +54,8 @@
     fileCwd: '/',          // 文件管理当前目录路径
     fileSel: new Set(),    // 选中的文件 identity
     fileItems: [],          // 当前目录文件列表
-    homeCats: [],           // 6v520 各分类条目 [{category,name,items}]
+    homeCats: [],           // 6v520 各分类条目 [{category,name,items}]（每分类前 100 条）
     homeActiveCat: null,    // 当前选中的分类目录名
-    homeLoadedCats: new Set(), // 已展开到 100 条的分类（避免重复请求）
     pendingHome: null,      // 从发现页点击跳转到搜索页时携带的 {title,url,category}
     theme: 'auto',
     pollTimer: null,
@@ -251,6 +250,13 @@
         </div>
       </header>
       <main class="content" id="content"></main>
+      <nav class="mobile-nav">
+        <a class="m-nav-item ${state.view === 'home' ? 'active' : ''}" href="#home"><span class="m-ico">🏠</span><span class="m-lbl">发现</span></a>
+        <a class="m-nav-item ${state.view === 'search' ? 'active' : ''}" href="#search"><span class="m-ico">🔍</span><span class="m-lbl">搜索</span></a>
+        <a class="m-nav-item ${state.view === 'tasks' ? 'active' : ''}" href="#tasks"><span class="m-ico">📋</span><span class="m-lbl">任务</span></a>
+        <a class="m-nav-item ${state.view === 'files' ? 'active' : ''}" href="#files"><span class="m-ico">📂</span><span class="m-lbl">文件</span></a>
+        <a class="m-nav-item ${state.view === 'settings' ? 'active' : ''}" href="#settings"><span class="m-ico">⚙</span><span class="m-lbl">设置</span></a>
+      </nav>
     </div>`;
   }
   function bindShell() {
@@ -279,52 +285,24 @@
   function bindHome() {
     const btn = $('#btnRefreshHome');
     if (btn) btn.onclick = () => {
-      // 手动刷新：清空已加载的完整分类标记，重新走首屏
-      state.homeLoadedCats = new Set();
       state.homeActiveCat = null;
       loadHome();
     };
   }
-  // loadHome：首屏加载所有分类的概览（每分类 20 条）。
+  // loadHome：并发抓取所有分类，每分类前 100 条（一次拉满，无二次请求）。
   async function loadHome() {
     const grid = $('#homeGrid'), tabs = $('#homeTabs');
-    if (grid) grid.innerHTML = '<div class="loading-box"><span class="spinner"></span> 正在抓取各分类资源（11 分类并发，约 5~10 秒）…</div>';
+    if (grid) grid.innerHTML = '<div class="loading-box"><span class="spinner"></span> 正在抓取各分类前 100 条（11 分类并发，约 10~20 秒）…</div>';
     if (tabs) tabs.innerHTML = '';
     const { ok, data } = await api.get('/api/home');
     if (!ok) { if (grid) grid.innerHTML = `<div class="empty"><div class="ico">⚠️</div>${esc(data.error || '加载失败')}</div>`; return; }
     state.homeCats = data || [];
-    state.homeLoadedCats = new Set(); // 记录已展开到 100 条的分类
     if (!state.homeCats.length) { if (grid) grid.innerHTML = '<div class="empty"><div class="ico">📭</div>未抓取到内容</div>'; return; }
     if (state.homeActiveCat == null || !state.homeCats.some(c => c.category === state.homeActiveCat)) {
       state.homeActiveCat = state.homeCats[0].category;
     }
     renderHomeTabs();
     renderHomeGrid();
-    // 首屏默认展开第一个分类的完整列表
-    expandHomeCat(state.homeActiveCat);
-  }
-  // expandHomeCat：点击分类标签时拉取该分类前 100 条。
-  // 已加载过的分类不重复请求；首屏的 20 条会先展示，加载完成后再替换为 100 条。
-  async function expandHomeCat(cat) {
-    if (!cat) return;
-    if (state.homeLoadedCats && state.homeLoadedCats.has(cat)) {
-      renderHomeGrid();
-      return;
-    }
-    // 先展示首屏已有的 20 条（避免空白），加加载提示
-    renderHomeGrid(true);
-    const { ok, data } = await api.get('/api/home?cat=' + encodeURIComponent(cat));
-    if (!ok) { toast(data.error || '加载分类失败', 'warn'); return; }
-    const arr = data || [];
-    if (arr.length) {
-      // 用 100 条结果替换该分类的 20 条
-      const idx = state.homeCats.findIndex(c => c.category === cat);
-      if (idx >= 0) state.homeCats[idx].items = arr[0].items;
-    }
-    if (!state.homeLoadedCats) state.homeLoadedCats = new Set();
-    state.homeLoadedCats.add(cat);
-    // 仅当用户仍停留在该分类时才刷新视图
-    if (state.homeActiveCat === cat) renderHomeGrid();
   }
   function renderHomeTabs() {
     const tabs = $('#homeTabs');
@@ -336,13 +314,11 @@
       if (state.homeActiveCat === b.dataset.cat) return;
       state.homeActiveCat = b.dataset.cat;
       renderHomeTabs();
-      // 点击分类标签 → 拉取该分类前 100 条
-      expandHomeCat(state.homeActiveCat);
+      renderHomeGrid();
     });
   }
   // renderHomeGrid：纯文字列表，每行显示日期 + 标题。
-  // loading=true 时在底部追加加载提示（已展开分类的 100 条正在拉取）。
-  function renderHomeGrid(loading) {
+  function renderHomeGrid() {
     const grid = $('#homeGrid');
     if (!grid) return;
     const cat = state.homeCats.find(c => c.category === state.homeActiveCat);
@@ -355,7 +331,7 @@
         ${d ? `<span class="home-date">${esc(d)}</span>` : ''}
         <span class="home-text">${esc(it.title)}</span>
       </div>`;
-    }).join('') + (loading ? '<div class="loading-box"><span class="spinner"></span> 正在加载该分类前 100 条…</div>' : '');
+    }).join('');
     $$('.home-row').forEach(el => el.onclick = () => clickHome(+el.dataset.idx));
   }
   // clickHome：点击发现页条目 → 跳转搜索页 → 自动用标题搜索并展开磁力链。
@@ -595,6 +571,7 @@
         <div class="progress"><span style="width:${pct}%"></span></div>
         <div class="pct">${pct}%</div>
         <span class="pill ${sCls}">${esc(taskStatus(t.status))}</span>
+        ${t.status === 2 && t.save_path ? `<button class="icon-btn t-org" data-save="${esc(t.save_path)}" data-name="${esc(name)}" title="整理文件：删广告 + 规范命名">✨</button>` : ''}
         <button class="icon-btn t-del" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="删除此任务">🗑</button>
       </div>`;
     }).join('') + `<div class="pager">
@@ -618,6 +595,8 @@
     };
     // 单条删除
     $$('.t-del').forEach(b => b.onclick = () => deleteTask(b.dataset.id, b.dataset.name));
+    // 单条整理（仅已完成任务）
+    $$('.t-org').forEach(b => b.onclick = () => organizeTask(b.dataset.save, b.dataset.name));
     // 翻页
     const prev = $('#prevPage'), next = $('#nextPage');
     if (prev) prev.onclick = () => { if (state.taskPage > 1) { state.taskPage--; renderTaskPage(); } };
@@ -646,6 +625,49 @@
     if (!ok) { toast(data.error || '删除失败', 'error'); return; }
     toast(r.checked ? '已删除任务及文件' : '已删除任务', 'success');
     loadTasks();
+  }
+  // organizeTask 整理已完成任务的下载文件：删除广告 + 规范化视频文件名，结果用弹窗展示。
+  async function organizeTask(savePath, name) {
+    const r = await confirmDialog({
+      title: '整理文件',
+      message: `整理任务「<b>${esc(name)}</b>」的下载文件？<br><span class="muted text-xs">将删除非视频广告文件，并把视频重命名为规范格式（电影：<标题> (<年份>)；剧集：标题S01E05）</span>`,
+      confirmText: '整理',
+      danger: false,
+      checkboxLabel: '',
+    });
+    if (!r.ok) return;
+    toast('正在整理…', 'info');
+    const { ok, data } = await api.post('/api/tasks/organize', { save_path: savePath });
+    if (!ok) { toast(data.error || '整理失败', 'error'); return; }
+    showOrganizeResult(data, name);
+  }
+  function showOrganizeResult(res, name) {
+    const root = $('#modal-root');
+    const del = (res.deleted || []).map(n => `<li>🗑 ${esc(n)}</li>`).join('');
+    const rn = (res.renamed || []).map(r => `<li>✏️ <s>${esc(r.old)}</s> → <b>${esc(r.new)}</b></li>`).join('');
+    const sk = (res.skipped || []).map(n => `<li>⏭️ ${esc(n)}</li>`).join('');
+    const empty = (!del && !rn && !sk) ? '<div class="muted">该目录下没有需要整理的文件（可能已整理过或无视频文件）</div>' : '';
+    root.innerHTML = `
+    <div class="modal-mask" id="orgMask">
+      <div class="modal">
+        <div class="modal-head"><h3>✨ 整理结果</h3><button class="icon-btn" id="orgX">✕</button></div>
+        <div class="modal-body">
+          <div class="text-sm mb-8">任务：<b>${esc(name)}</b></div>
+          <div class="text-xs muted mb-8">📁 ${esc(res.save_path || '')}</div>
+          ${empty}
+          ${del ? `<div class="mt-8 text-sm"><b>删除广告/杂项（${res.deleted.length}）</b></div><ul class="org-list">${del}</ul>` : ''}
+          ${rn ? `<div class="mt-8 text-sm"><b>重命名视频（${res.renamed.length}）</b></div><ul class="org-list">${rn}</ul>` : ''}
+          ${sk ? `<div class="mt-8 text-sm"><b>跳过（${res.skipped.length}）</b><div class="muted text-xs">剧集文件解析不到集数时会跳过，保留原名</div></div><ul class="org-list">${sk}</ul>` : ''}
+        </div>
+        <div class="modal-foot">
+          <button class="btn" id="orgClose">关闭</button>
+        </div>
+      </div>
+    </div>`;
+    const close = () => { root.innerHTML = ''; };
+    $('#orgClose').onclick = close;
+    $('#orgX').onclick = close;
+    $('#orgMask').onclick = e => { if (e.target.id === 'orgMask') close(); };
   }
   async function batchDelete() {
     const ids = Array.from(state.taskSel);

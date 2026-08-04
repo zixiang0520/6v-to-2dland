@@ -169,6 +169,9 @@ textarea.input { resize: vertical; min-height: 70px; }
 .nav-item.active { background: var(--primary-soft); color: var(--primary); }
 .topbar .actions { display: flex; align-items: center; gap: 8px; }
 
+/* 移动端底部导航（默认隐藏，移动端显示） */
+.mobile-nav { display: none; }
+
 .pill {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 4px 10px; border-radius: 999px; font-size: 12px; font-weight: 500;
@@ -402,16 +405,106 @@ textarea.input { resize: vertical; min-height: 70px; }
 }
 
 /* ============ 响应式 ============ */
+
+/* 平板（≤900px）：略微收紧 */
+@media (max-width: 900px) {
+  .content { padding: 22px 18px 90px; }
+  .topbar { padding: 0 16px; gap: 12px; }
+}
+
+/* 移动端（≤640px）：底部 Tab Bar 导航 + 全面重排 */
 @media (max-width: 640px) {
-  .topbar { padding: 0 14px; gap: 10px; }
-  .topbar .brand span { display: none; }
-  .nav-item { padding: 6px 10px; font-size: 13px; }
-  .content { padding: 18px 14px 90px; }
+  /* 顶部栏：隐藏顶部导航，精简 actions */
+  .topbar { padding: 0 14px; height: 54px; gap: 8px; }
+  .topbar .brand { font-size: 14px; gap: 8px; }
+  .topbar .brand .mark { width: 28px; height: 28px; font-size: 13px; }
+  .topbar .nav { display: none; }            /* 顶部导航移到底部 tab bar */
+  .topbar .actions .pill { display: none; }  /* 移动端隐藏 2dland 状态 pill，节省空间 */
+  .topbar .actions { gap: 4px; }
+  .icon-btn { width: 38px; height: 38px; font-size: 16px; }
+  #logoutBtn { padding: 6px 10px; }
+
+  /* 底部 Tab Bar */
+  .mobile-nav {
+    display: flex; position: fixed; bottom: 0; left: 0; right: 0; z-index: 40;
+    height: 62px; padding-bottom: env(safe-area-inset-bottom, 0);
+    background: var(--surface); border-top: 1px solid var(--border);
+    box-shadow: 0 -2px 10px rgba(15,23,42,.06);
+  }
+  .m-nav-item {
+    flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; color: var(--text-muted); font-size: 11px; transition: all .12s;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .m-nav-item .m-ico { font-size: 19px; line-height: 1; }
+  .m-nav-item .m-lbl { font-size: 11px; }
+  .m-nav-item.active { color: var(--primary); }
+  .m-nav-item:active { background: var(--surface-2); }
+
+  /* 内容区：底部留空给 tab bar */
+  .content { padding: 16px 12px 90px; max-width: 100%; }
+  .page-head { flex-direction: column; align-items: stretch; gap: 10px; margin-bottom: 16px; }
+  .page-head h2 { font-size: 18px; }
+  .page-head .row { flex-wrap: wrap; }
+
+  .card { padding: 16px 14px; margin-bottom: 14px; border-radius: 12px; }
   .field-row { grid-template-columns: 1fr; }
-  .search-bar { flex-direction: column; }
-  .search-bar .btn { padding: 11px; }
-  .task .progress { width: 80px; }
-  .auth-card { padding: 26px 20px; }
+
+  /* 搜索栏：纵向堆叠，按钮全宽 */
+  .search-bar { flex-direction: column; gap: 8px; }
+  .search-bar .input { font-size: 16px; padding: 12px 14px; }  /* ≥16px 防 iOS 缩放 */
+  .search-bar .btn { padding: 12px; width: 100%; }
+  .toolbar { gap: 8px; }
+
+  /* 任务行：移动端隐藏进度条（状态 pill 已体现），保留 名称+状态+按钮 */
+  .task { gap: 8px; padding: 12px 0; }
+  .task .progress, .task .pct { display: none; }
+  .task .t-name { font-size: 13px; }
+  .task .icon-btn { width: 36px; height: 36px; }
+  .task-bar { font-size: 12px; }
+
+  /* 已选浮动栏：上移避开底部导航 */
+  .fab { bottom: 76px; padding: 10px 16px; gap: 10px; font-size: 13px; }
+
+  /* 文件管理：移动端隐藏 meta/date，增大行高便于触摸 */
+  .fitem { padding: 12px 6px; gap: 10px; }
+  .f-meta, .f-date { display: none; }
+  .f-icon { font-size: 20px; }
+  .f-name { font-size: 13px; }
+
+  /* 设置页：kv 单列 */
+  .kv-grid { grid-template-columns: 1fr; }
+
+  /* 发现页分类标签：可横向滚动，不换行挤占 */
+  .home-tabs { flex-wrap: nowrap; overflow-x: auto; padding-bottom: 10px; -webkit-overflow-scrolling: touch; }
+  .home-tab { flex-shrink: 0; }
+
+  /* 模态框：接近全宽 */
+  .modal-mask { padding: 12px; }
+  .modal { max-width: 100%; border-radius: 14px; }
+  .modal-head { padding: 14px 16px; }
+  .modal-body { padding: 16px; }
+  .modal-foot { padding: 12px 16px; }
+  .modal-foot .btn { flex: 1; padding: 11px; }
+
+  /* Toast：移动端底部居中，避开导航 */
+  .toast-wrap { bottom: 76px; right: 12px; left: 12px; align-items: center; }
+  .toast { min-width: 0; max-width: 100%; width: 100%; font-size: 13px; }
+
+  /* 登录/向导卡片 */
+  .auth-screen { padding: 16px; }
+  .auth-card { padding: 26px 20px; border-radius: 16px; }
+
+  /* 分页器 */
+  .pager { gap: 10px; padding: 14px 0 4px; }
+  .pager .btn.sm { padding: 8px 14px; }
+}
+
+/* 超小屏（≤380px）：进一步收紧 */
+@media (max-width: 380px) {
+  .topbar .brand span { display: none; }  /* 只留 mark 图标 */
+  .m-nav-item .m-lbl { font-size: 10px; }
+  .content { padding: 12px 10px 88px; }
 }
 
 /* ============ 通用工具 ============ */
@@ -427,6 +520,10 @@ textarea.input { resize: vertical; min-height: 70px; }
 .text-sm { font-size: 13px; } .text-xs { font-size: 12px; }
 .center { text-align: center; }
 .empty { padding: 32px 16px; text-align: center; color: var(--text-muted); font-size: 13px; }
+.org-list { list-style: none; margin: 6px 0 0; padding: 0; max-height: 240px; overflow-y: auto; }
+.org-list li { padding: 5px 8px; font-size: 12px; border-radius: 6px; word-break: break-all; }
+.org-list li:hover { background: var(--hover); }
+.org-list li s { color: var(--text-muted); }
 .empty .ico { font-size: 32px; margin-bottom: 8px; opacity: .5; }
 .err-text { color: var(--danger); font-size: 13px; }
 .ok-text { color: var(--success); font-size: 13px; }
