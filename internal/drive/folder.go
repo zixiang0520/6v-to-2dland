@@ -48,25 +48,28 @@ func sanitize(name string) string {
 
 // ensureFolderByCategory 按 /<baseDir>/<分类>/<标题>[/<季>] 建目录。
 // 剧集类建立第三级 seasonName 目录；电影类忽略 seasonName，止于标题目录。
+// 关键：Create 的 Parent 字段需要父目录的 identity（不是 path），否则 2dland
+// 会把目录建到根目录（表现为根目录散落大量「第N季」「标题(年份)」空目录）。
+// 这里链式传递每层的 identity：第一层 parentID 为空（表示根）。
 func ensureFolderByCategory(ctx context.Context, s snapshot, category, titleName, seasonName string) (string, error) {
 	log.Printf("ensureFolderByCategory: category=%q titleName=%q seasonName=%q baseDir=%q", category, titleName, seasonName, s.baseDir)
-	base, err := ensureDir(ctx, s.userfile, "/", s.baseDir)
+	base, baseID, err := ensureDir(ctx, s.userfile, "/", "", s.baseDir)
 	if err != nil {
 		log.Printf("ensureFolderByCategory: ensure baseDir failed: %v", err)
 		return "", err
 	}
-	cat, err := ensureDir(ctx, s.userfile, base, categoryName(category))
+	cat, catID, err := ensureDir(ctx, s.userfile, base, baseID, categoryName(category))
 	if err != nil {
 		log.Printf("ensureFolderByCategory: ensure category failed: %v", err)
 		return "", err
 	}
-	titlePath, err := ensureDir(ctx, s.userfile, cat, titleName)
+	titlePath, titleID, err := ensureDir(ctx, s.userfile, cat, catID, titleName)
 	if err != nil {
 		log.Printf("ensureFolderByCategory: ensure title failed: %v", err)
 		return "", err
 	}
 	if isTVCategory(category) && seasonName != "" {
-		sp, err := ensureDir(ctx, s.userfile, titlePath, seasonName)
+		sp, _, err := ensureDir(ctx, s.userfile, titlePath, titleID, seasonName)
 		if err != nil {
 			log.Printf("ensureFolderByCategory: ensure season failed: %v", err)
 			return "", err
@@ -78,28 +81,28 @@ func ensureFolderByCategory(ctx context.Context, s snapshot, category, titleName
 	return titlePath, nil
 }
 
-// ensureDir 在 parentPath 下确保名为 name 的目录存在，返回其完整路径。
+// ensureDir 在 parentPath（用于 normalizePath 兜底）下确保名为 name 的目录存在。
+// parentID 是父目录的 identity（空表示根），传给 Create 的 Parent 字段。
+// 返回目录的完整路径和 identity（供下一层使用）。
 // 防御：2dland API 返回的 File.Path 偶发只是目录名（非 / 开头的相对路径），
-// 直接用作下一步的 parent 或 offline_task/add 的 save_path 会导致目录错位
-// （表现为只建出最后一级「第N季」）。这里统一校验：返回值必须以 parentPath
-// 为前缀，否则用 joinPath(parentPath, name) 兜底拼出完整路径。
-func ensureDir(ctx context.Context, uf *userfile.UserFileService, parentPath, name string) (string, error) {
+// 用 normalizePath 校验并兜底拼出完整路径，确保 save_path 正确。
+func ensureDir(ctx context.Context, uf *userfile.UserFileService, parentPath, parentID, name string) (string, string, error) {
 	if existing, _ := findDir(ctx, uf, parentPath, name); existing != nil {
 		p := normalizePath(existing.Path, parentPath, name)
-		log.Printf("ensureDir: hit existing parent=%q name=%q apiPath=%q usePath=%q", parentPath, name, existing.Path, p)
-		return p, nil
+		log.Printf("ensureDir: hit existing parentPath=%q name=%q apiPath=%q usePath=%q identity=%q", parentPath, name, existing.Path, p, existing.Identity)
+		return p, existing.Identity, nil
 	}
 	created, err := uf.Create(ctx, &userfile.File{
 		Name:   name,
 		Dir:    true,
-		Parent: parentPath,
+		Parent: parentID, // identity，不是 path
 	})
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	p := normalizePath(created.Path, parentPath, name)
-	log.Printf("ensureDir: created parent=%q name=%q apiPath=%q usePath=%q", parentPath, name, created.Path, p)
-	return p, nil
+	log.Printf("ensureDir: created parentPath=%q parentID=%q name=%q apiPath=%q usePath=%q identity=%q", parentPath, parentID, name, created.Path, p, created.Identity)
+	return p, created.Identity, nil
 }
 
 // normalizePath 校验 apiPath 是否为相对于根的完整路径；不是则用 wantPath 兜底。
