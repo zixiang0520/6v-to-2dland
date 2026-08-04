@@ -22,8 +22,8 @@ type PushResultItem struct {
 	Name     string `json:"name"`
 	Magnet   string `json:"magnet"`
 	Category string `json:"category"`
-	Folder   string `json:"folder"`      // 规范化后的标题目录名
-	SavePath string `json:"save_path"`   // 实际保存路径
+	Folder   string `json:"folder"`    // 规范化后的标题目录名
+	SavePath string `json:"save_path"` // 实际保存路径
 	Season   string `json:"season,omitempty"`
 	OK       bool   `json:"ok"`
 	Identity string `json:"identity,omitempty"`
@@ -37,12 +37,13 @@ type PushResult struct {
 
 // Push 按磁力链所属资源建立 分类/标题/[季] 目录并添加离线任务。
 func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error) {
+	s := c.snap()
 	res := &PushResult{}
 	cache := map[string]string{} // key -> savePath，避免重复建目录
 	for _, it := range items {
 		ri := PushResultItem{Name: it.Name, Magnet: it.Magnet, Category: it.Category}
 
-		titleName := c.normalizeFolderName(ctx, it.Title, it.Category)
+		titleName := normalizeFolderName(ctx, s.tmdb, it.Title, it.Category)
 		ri.Folder = titleName
 
 		seasonName := ""
@@ -56,7 +57,7 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 
 		savePath, cached := cache[key]
 		if !cached {
-			sp, err := c.EnsureFolderByCategory(ctx, it.Category, titleName, seasonName)
+			sp, err := ensureFolderByCategory(ctx, s, it.Category, titleName, seasonName)
 			if err != nil {
 				ri.Error = "创建文件夹失败: " + err.Error()
 				cache[key] = ""
@@ -73,7 +74,7 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 		}
 		ri.SavePath = savePath
 
-		task, err := c.offline.Add(ctx, &offline.UserTask{
+		task, err := s.offline.Add(ctx, &offline.UserTask{
 			Url:      it.Magnet,
 			Name:     it.Name,
 			SavePath: savePath,
@@ -103,8 +104,8 @@ func parseTitle(t string) (name, year string) {
 }
 
 // normalizeFolderName 用 TMDB 规范化标题为 "名字 (年份)"，失败回退原标题。
-func (c *Client) normalizeFolderName(ctx context.Context, title, category string) string {
-	if c.tmdb != nil {
+func normalizeFolderName(ctx context.Context, t *tmdb.Client, title, category string) string {
+	if t != nil {
 		name, year := parseTitle(title)
 		if name == "" {
 			name = title
@@ -113,7 +114,7 @@ func (c *Client) normalizeFolderName(ctx context.Context, title, category string
 		if isTVCategory(category) {
 			mediaType = "tv"
 		}
-		if r, err := c.tmdb.Search(ctx, name, mediaType); err == nil && r != nil && r.Title != "" {
+		if r, err := t.Search(ctx, name, mediaType); err == nil && r != nil && r.Title != "" {
 			y := tmdb.YearFromDate(r.Date)
 			if y == "" {
 				y = year
@@ -129,7 +130,8 @@ func (c *Client) normalizeFolderName(ctx context.Context, title, category string
 
 // ListTasks 列出当前离线下载任务。
 func (c *Client) ListTasks(ctx context.Context) ([]*offline.UserTask, error) {
-	resp, err := c.offline.List(ctx, &offline.OfflineTaskListRequest{})
+	s := c.snap()
+	resp, err := s.offline.List(ctx, &offline.OfflineTaskListRequest{})
 	if err != nil {
 		return nil, err
 	}

@@ -1,139 +1,604 @@
-const api = (p, opt) => fetch(p, opt).then(r => r.json().then(d => ({ ok: r.ok, d })));
-const selected = new Map(); // magnet -> {name, magnet, category, title}
+'use strict';
+(function () {
+  // ============ 工具 ============
+  const $ = (s, r = document) => r.querySelector(s);
+  const $$ = (s, r = document) => Array.from(r.querySelectorAll(s));
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  async function copy(text) {
+    try { await navigator.clipboard.writeText(text); toast('已复制到剪贴板', 'success'); }
+    catch { const t = document.createElement('textarea'); t.value = text; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); toast('已复制', 'success'); }
+  }
 
-function esc(s) {
-  return String(s || '').replace(/[<>&"]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;', '"': '&quot;' }[c]));
-}
-function statusText(s) { return ['等待中', '下载中', '已完成', '失败'][s] || ('状态' + s); }
+  // 6v 分类中文映射（与后端 categoryNames 保持一致）
+  const catNames = { dy: '电影', gydy: '国语电影', gq: '经典高清', zydy: '动漫', jddy: '动画电影', '3D': '3D电影', dlz: '国剧', rj: '日韩剧', mj: '欧美剧', zy: '综艺', shoujidianyingmp4: '手机电影' };
+  const catName = c => catNames[c] || c || '未分类';
+  const taskStatus = s => ['等待中', '下载中', '已完成', '失败'][s] || ('状态' + s);
 
-// —— 登录状态 ——
-async function refreshAuth() {
-  const { ok, d } = await api('/api/auth/status');
-  const el = document.getElementById('authStatus');
-  const btn = document.getElementById('btnLogin');
-  if (!ok) { el.textContent = '状态未知'; return; }
-  btn.disabled = !d.has_credentials;
-  if (!d.has_credentials) { el.textContent = '未配置凭证（见 config.json）'; return; }
-  el.textContent = d.logged_in ? '已登录' : '未登录';
-}
-
-document.getElementById('btnLogin').onclick = async () => {
-  const { ok, d } = await api('/api/auth/login', { method: 'POST' });
-  if (!ok) { alert(d.error || '登录失败'); return; }
-  document.getElementById('mUri').textContent = d.verification_uri;
-  document.getElementById('mUri').href = d.verification_uri;
-  document.getElementById('mCode').textContent = d.user_code;
-  document.getElementById('mState').textContent = '等待授权…';
-  document.getElementById('modal').classList.remove('hidden');
-  pollAuth(d.interval || 5);
-};
-async function pollAuth(interval) {
-  const timer = setInterval(async () => {
-    const { ok, d } = await api('/api/auth/poll');
-    if (!ok) return;
-    document.getElementById('mState').textContent = '状态：' + d.status;
-    if (d.logged_in) {
-      clearInterval(timer);
-      document.getElementById('mState').textContent = '登录成功！';
-      refreshAuth();
-      setTimeout(() => document.getElementById('modal').classList.add('hidden'), 1200);
-    }
-  }, interval * 1000);
-};
-document.getElementById('mClose').onclick = () => document.getElementById('modal').classList.add('hidden');
-
-// —— 搜索 ——
-document.getElementById('btnSearch').onclick = doSearch;
-document.getElementById('kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
-
-async function doSearch() {
-  const q = document.getElementById('kw').value.trim();
-  if (!q) return;
-  const hint = document.getElementById('searchHint');
-  const res = document.getElementById('results');
-  hint.textContent = '搜索中（全分类并发爬取，约需数十秒）…';
-  res.innerHTML = '';
-  const { ok, d } = await api('/api/search?q=' + encodeURIComponent(q));
-  hint.textContent = '';
-  if (!ok) { res.innerHTML = '<p class="err">' + esc(d.error) + '</p>'; return; }
-  if (!d.length) { res.innerHTML = '<p>未找到匹配资源</p>'; return; }
-  res.innerHTML = d.map((r, i) =>
-    `<div class="res"><div class="res-head">
-      <span class="date">${esc(r.date)}</span><span class="cat">${esc(r.category)}</span>
-      <a href="${esc(r.url)}" target="_blank">${esc(r.title)}</a>
-      <button data-i="${i}" class="btn-mag ghost">查看磁力链</button>
-    </div><div class="mags" id="mags-${i}"></div></div>`).join('');
-  d.forEach((r, i) => {
-    document.querySelector(`[data-i="${i}"]`).onclick = () => toggleMags(i, r);
-  });
-  window._last = d;
-}
-
-async function toggleMags(i, r) {
-  const box = document.getElementById('mags-' + i);
-  if (box.innerHTML) { box.innerHTML = ''; return; }
-  box.innerHTML = '<p class="hint">加载磁力链…</p>';
-  const { ok, d } = await api('/api/magnets?url=' + encodeURIComponent(r.url));
-  if (!ok) { box.innerHTML = '<p class="err">' + esc(d.error) + '</p>'; return; }
-  if (!d.length) { box.innerHTML = '<p>该页未提取到磁力链</p>'; return; }
-  box.innerHTML = d.map(m =>
-    `<label class="mag"><input type="checkbox" data-m="${esc(m.magnet)}">
-     <span class="mag-name">${esc(m.desc)}</span><code>${esc(m.magnet.slice(0, 70))}…</code></label>`).join('');
-  const checks = box.querySelectorAll('input[type=checkbox]');
-  d.forEach((m, idx) => {
-    const cb = checks[idx];
-    cb.checked = selected.has(m.magnet);
-    cb.onchange = () => {
-      if (cb.checked) {
-        selected.set(m.magnet, { name: m.name, magnet: m.magnet, category: r.category, title: r.title });
-      } else {
-        selected.delete(m.magnet);
+  // ============ API ============
+  const api = {
+    async call(path, opts = {}) {
+      let res;
+      try {
+        res = await fetch(path, {
+          headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
+          ...opts,
+        });
+      } catch (e) {
+        return { ok: false, status: 0, data: { error: '网络错误：' + e.message } };
       }
-      renderSelected();
+      const txt = await res.text();
+      let data;
+      try { data = txt ? JSON.parse(txt) : {}; } catch { data = { error: txt || '响应解析失败' }; }
+      if (res.status === 401 && state.uiSession) {
+        state.uiSession.logged_in = false;
+        toast('会话已过期，请重新登录', 'warn');
+        render();
+      }
+      return { ok: res.ok, status: res.status, data };
+    },
+    get(p) { return this.call(p); },
+    post(p, body) { return this.call(p, { method: 'POST', body: JSON.stringify(body || {}) }); },
+  };
+
+  // ============ 状态 ============
+  const state = {
+    uiSession: null,
+    auth: { logged_in: false, has_credentials: false },
+    settings: null,
+    view: 'search',
+    selected: new Map(),   // magnet -> {name, magnet, category, title}
+    lastResults: [],
+    theme: 'auto',
+    pollTimer: null,
+  };
+
+  // ============ 主题 ============
+  function initTheme() {
+    state.theme = localStorage.getItem('theme') || 'auto';
+    applyTheme();
+    matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+      if (state.theme === 'auto') applyTheme();
+    });
+  }
+  function applyTheme() {
+    const isDark = state.theme === 'dark' || (state.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches);
+    document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
+  }
+  function toggleTheme() {
+    const cur = document.documentElement.getAttribute('data-theme');
+    state.theme = cur === 'dark' ? 'light' : 'dark';
+    localStorage.setItem('theme', state.theme);
+    applyTheme();
+    const btn = $('#themeBtn');
+    if (btn) btn.textContent = state.theme === 'dark' || (state.theme === 'auto' && matchMedia('(prefers-color-scheme: dark)').matches) ? '☀️' : '🌙';
+  }
+
+  // ============ Toast ============
+  function toast(msg, type = 'info', ms = 3000) {
+    const el = document.createElement('div');
+    el.className = `toast ${type}`;
+    el.textContent = msg;
+    $('#toast').appendChild(el);
+    setTimeout(() => { el.style.transition = 'opacity .25s, transform .25s'; el.style.opacity = '0'; el.style.transform = 'translateX(20px)'; setTimeout(() => el.remove(), 260); }, ms);
+  }
+
+  // ============ 初始化 ============
+  async function init() {
+    initTheme();
+    window.addEventListener('hashchange', onHash);
+    const { ok, data } = await api.get('/api/ui/session');
+    if (ok) state.uiSession = data;
+    if (state.uiSession && state.uiSession.logged_in) {
+      await refreshAuth();
+      onHash();
+    } else {
+      render();
+    }
+  }
+
+  function onHash() {
+    const h = location.hash.slice(1);
+    state.view = ['search', 'tasks', 'settings'].includes(h) ? h : 'search';
+    render();
+  }
+
+  // ============ 渲染入口 ============
+  function render() {
+    const app = $('#app');
+    if (!state.uiSession) {
+      app.innerHTML = '<div class="boot"><div class="spinner lg"></div><p class="muted">正在加载…</p></div>';
+      return;
+    }
+    if (!state.uiSession.auth_required) { app.innerHTML = viewSetup(); bindSetup(); return; }
+    if (!state.uiSession.logged_in) { app.innerHTML = viewLogin(); bindLogin(); return; }
+    app.innerHTML = viewShell();
+    bindShell();
+    renderContent();
+  }
+
+  function renderContent() {
+    const c = $('#content');
+    if (!c) return;
+    if (state.view === 'tasks') { c.innerHTML = viewTasks(); bindTasks(); loadTasks(); }
+    else if (state.view === 'settings') { c.innerHTML = viewSettingsLoading(); loadSettings(); }
+    else { c.innerHTML = viewSearch(); bindSearch(); renderSelected(); }
+  }
+
+  // ============ 视图：UI 登录 ============
+  function viewLogin() {
+    return `
+    <div class="auth-screen">
+      <div class="auth-card">
+        <div class="logo">🔐</div>
+        <h1>访问登录</h1>
+        <p class="subtitle">请输入访问密码以进入控制台</p>
+        <form id="loginForm">
+          <div class="field">
+            <input type="password" id="pwd" class="input" placeholder="访问密码" autocomplete="current-password" autofocus>
+          </div>
+          <button type="submit" class="btn primary block lg">登 录</button>
+        </form>
+      </div>
+    </div>`;
+  }
+  function bindLogin() {
+    $('#loginForm').onsubmit = async e => {
+      e.preventDefault();
+      const btn = $('#loginForm button[type=submit]');
+      btn.disabled = true; btn.textContent = '登录中…';
+      const { ok, data } = await api.post('/api/ui/login', { password: $('#pwd').value });
+      if (!ok) { toast(data.error || '登录失败', 'error'); btn.disabled = false; btn.textContent = '登 录'; return; }
+      state.uiSession = { auth_required: true, logged_in: true };
+      await refreshAuth();
+      render();
     };
-  });
-}
+  }
 
-function renderSelected() {
-  const box = document.getElementById('selected');
-  document.getElementById('selCount').textContent = selected.size;
-  document.getElementById('btnPush').disabled = selected.size === 0;
-  if (!selected.size) { box.className = 'hint'; box.textContent = '暂未选择'; return; }
-  box.className = '';
-  box.innerHTML = [...selected.values()].map(m =>
-    `<div>• [${esc(m.category)}] ${esc(m.name)}</div>`).join('');
-}
+  // ============ 视图：首次设置向导 ============
+  function viewSetup() {
+    return `
+    <div class="auth-screen">
+      <div class="auth-card wide">
+        <div class="logo">🚀</div>
+        <h1>初始化配置</h1>
+        <p class="subtitle">首次使用，请完成以下设置（之后可在「设置」页修改）</p>
+        <form id="setupForm">
+          <div class="section-title">访问安全</div>
+          <div class="field">
+            <label>访问密码</label>
+            <input type="password" id="password" class="input" placeholder="设置访问本控制台的密码" autocomplete="new-password">
+            <div class="help">用于保护本 Web UI，建议使用强密码。</div>
+          </div>
 
-// —— 推送 ——
-document.getElementById('btnPush').onclick = async () => {
-  const magnets = [...selected.values()];
-  const pr = document.getElementById('pushResult');
-  pr.innerHTML = '<p class="hint">推送中（含 TMDB 规范化与建目录）…</p>';
-  const { ok, d } = await api('/api/push', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ magnets })
-  });
-  if (!ok) { pr.innerHTML = '<p class="err">' + esc(d.error) + '</p>'; return; }
-  const okN = d.items.filter(x => x.ok).length;
-  pr.innerHTML = `<p>已推送 ${okN}/${d.items.length} 条</p>` +
-    d.items.map(x => `<div class="${x.ok ? 'ok' : 'err'}">${esc(x.folder)}${x.season ? ' / ' + esc(x.season) : ''}：${x.ok ? '成功 → ' + esc(x.save_path) : esc(x.error)}</div>`).join('');
-  loadTasks();
-};
+          <div class="section-title">2dland 凭证</div>
+          <div class="field-row">
+            <div class="field"><label>Client ID</label><input id="client_id" class="input" placeholder="2dland 开放平台 client_id"></div>
+            <div class="field"><label>Client Secret</label><input type="password" id="client_secret" class="input" placeholder="client_secret"></div>
+          </div>
+          <div class="help" style="margin-top:-8px;margin-bottom:16px;">在 2dland 开放平台创建应用后获取，用于调用离线下载 API。</div>
 
-// —— 任务 ——
-document.getElementById('btnTasks').onclick = loadTasks;
-async function loadTasks() {
-  const box = document.getElementById('tasks');
-  box.className = '';
-  box.innerHTML = '<p class="hint">加载中…</p>';
-  const { ok, d } = await api('/api/tasks');
-  if (!ok) { box.innerHTML = '<p class="err">' + esc(d.error) + '</p>'; return; }
-  if (!d || !d.length) { box.innerHTML = '<p class="hint">暂无任务</p>'; return; }
-  box.innerHTML = d.map(t =>
-    `<div class="task"><span class="t-name">${esc(t.name || t.url)}</span>
-     <span class="prog">${t.progress || 0}%</span>
-     <span class="status">${statusText(t.status)}</span></div>`).join('');
-}
+          <div class="section-title">TMDB（可选，用于规范化标题与年份）</div>
+          <div class="field"><label>TMDB API Key</label><input id="tmdb_api_key" class="input" placeholder="留空则不启用标题规范化"></div>
+          <div class="field"><label>TMDB 代理服务器</label><input id="tmdb_proxy" class="input" placeholder="如 http://127.0.0.1:7890（TMDB 在国内通常需代理）"></div>
 
-refreshAuth();
+          <button type="submit" class="btn primary block lg">完成初始化</button>
+        </form>
+      </div>
+    </div>`;
+  }
+  function bindSetup() {
+    $('#setupForm').onsubmit = async e => {
+      e.preventDefault();
+      const body = {
+        password: $('#password').value,
+        client_id: $('#client_id').value.trim(),
+        client_secret: $('#client_secret').value.trim(),
+        tmdb_api_key: $('#tmdb_api_key').value.trim(),
+        tmdb_proxy: $('#tmdb_proxy').value.trim(),
+      };
+      if (!body.password) { toast('请设置访问密码', 'error'); return; }
+      if (!body.client_id || !body.client_secret) { toast('请填写 2dland client_id / client_secret', 'error'); return; }
+      const btn = $('#setupForm button[type=submit]');
+      btn.disabled = true; btn.textContent = '保存中…';
+      const { ok, data } = await api.post('/api/ui/setup', body);
+      if (!ok) { toast(data.error || '初始化失败', 'error'); btn.disabled = false; btn.textContent = '完成初始化'; return; }
+      toast('初始化完成，欢迎使用！', 'success');
+      state.uiSession = { auth_required: true, logged_in: true };
+      await refreshAuth();
+      location.hash = 'search';
+      render();
+    };
+  }
+
+  // ============ 视图：主框架 ============
+  function viewShell() {
+    const a = state.auth;
+    const authPill = a.logged_in
+      ? '<span class="pill ok"><span class="dot"></span>2dland 已登录</span>'
+      : (a.has_credentials
+        ? '<span class="pill warn"><span class="dot"></span>2dland 未登录</span>'
+        : '<span class="pill"><span class="dot"></span>未配置凭证</span>');
+    const isDark = document.documentElement.getAttribute('data-theme') === 'dark';
+    return `
+    <div class="app-shell">
+      <header class="topbar">
+        <div class="brand"><span class="mark">6v</span><span>6v → 2dland</span></div>
+        <nav class="nav">
+          <a class="nav-item ${state.view === 'search' ? 'active' : ''}" href="#search">🔍 搜索</a>
+          <a class="nav-item ${state.view === 'tasks' ? 'active' : ''}" href="#tasks">📋 任务</a>
+          <a class="nav-item ${state.view === 'settings' ? 'active' : ''}" href="#settings">⚙ 设置</a>
+        </nav>
+        <div class="actions">
+          ${authPill}
+          <button class="icon-btn" id="themeBtn" title="切换主题">${isDark ? '☀️' : '🌙'}</button>
+          <button class="btn sm ghost" id="logoutBtn">退出</button>
+        </div>
+      </header>
+      <main class="content" id="content"></main>
+    </div>`;
+  }
+  function bindShell() {
+    $('#themeBtn').onclick = toggleTheme;
+    $('#logoutBtn').onclick = async () => {
+      await api.post('/api/ui/logout');
+      state.uiSession = { auth_required: true, logged_in: false };
+      state.selected.clear();
+      render();
+    };
+  }
+
+  // ============ 视图：搜索 ============
+  function viewSearch() {
+    return `
+    <div class="page-head">
+      <div>
+        <h2>搜索资源</h2>
+        <div class="desc">从 6v520 全分类并发检索，勾选磁力链后一键推送到 2dland 离线下载</div>
+      </div>
+    </div>
+    <div class="search-bar">
+      <input id="kw" class="input" placeholder="输入电影 / 剧集名，如：灵魂伴侣" autocomplete="off">
+      <button id="btnSearch" class="btn primary lg">🔍 搜索</button>
+    </div>
+    <div id="searchHint" class="muted text-sm mb-12"></div>
+    <div id="results"></div>
+    <div id="selFab"></div>`;
+  }
+  function bindSearch() {
+    $('#btnSearch').onclick = doSearch;
+    $('#kw').addEventListener('keydown', e => { if (e.key === 'Enter') doSearch(); });
+  }
+  async function doSearch() {
+    const q = $('#kw').value.trim();
+    if (!q) return;
+    const hint = $('#searchHint'), res = $('#results'), btn = $('#btnSearch');
+    btn.disabled = true;
+    hint.innerHTML = '<span class="spinner"></span> 搜索中（全分类并发爬取，约需数十秒）…';
+    res.innerHTML = '';
+    const { ok, data } = await api.get('/api/search?q=' + encodeURIComponent(q));
+    btn.disabled = false;
+    hint.textContent = '';
+    if (!ok) { res.innerHTML = `<div class="empty"><div class="ico">⚠️</div>${esc(data.error || '搜索失败')}</div>`; return; }
+    if (!data || !data.length) { res.innerHTML = '<div class="empty"><div class="ico">🔍</div>未找到匹配资源</div>'; return; }
+    state.lastResults = data;
+    hint.textContent = `找到 ${data.length} 条结果，点击「查看磁力链」展开`;
+    res.innerHTML = data.map((r, i) => `
+      <div class="result">
+        <div class="result-head">
+          ${r.date ? `<span class="tag date">${esc(r.date)}</span>` : ''}
+          <span class="tag cat">${esc(catName(r.category))}</span>
+          <a class="title" href="${esc(r.url)}" target="_blank">${esc(r.title)}</a>
+          <button class="btn sm ghost" data-mag="${i}">查看磁力链 ▾</button>
+        </div>
+        <div class="result-body" id="mags-${i}"></div>
+      </div>`).join('');
+    $$('[data-mag]').forEach(b => b.onclick = () => toggleMags(+b.dataset.mag));
+  }
+  async function toggleMags(i) {
+    const box = $('#mags-' + i), btn = $(`[data-mag="${i}"]`);
+    if (box.innerHTML) { box.innerHTML = ''; btn.textContent = '查看磁力链 ▾'; return; }
+    const r = state.lastResults[i];
+    box.innerHTML = '<div class="muted text-sm"><span class="spinner"></span> 加载磁力链…</div>';
+    btn.textContent = '收起 ▴';
+    const { ok, data } = await api.get('/api/magnets?url=' + encodeURIComponent(r.url));
+    if (!ok) { box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
+    if (!data || !data.length) { box.innerHTML = '<div class="muted text-sm">该页未提取到磁力链</div>'; return; }
+    box.innerHTML = data.map((m, idx) => {
+      const checked = state.selected.has(m.magnet);
+      return `<label class="mag ${checked ? 'checked' : ''}">
+        <input type="checkbox" data-idx="${idx}" ${checked ? 'checked' : ''}>
+        <div class="mag-info">
+          <div class="mag-desc">${esc(m.desc || m.name)}</div>
+          <div class="mag-hash">${esc(m.magnet.slice(0, 80))}…</div>
+        </div>
+      </label>`;
+    }).join('');
+    box.querySelectorAll('input[type=checkbox]').forEach((cb, idx) => {
+      const m = data[idx];
+      cb.onchange = () => {
+        if (cb.checked) state.selected.set(m.magnet, { name: m.name, magnet: m.magnet, category: r.category, title: r.title });
+        else state.selected.delete(m.magnet);
+        cb.closest('.mag').classList.toggle('checked', cb.checked);
+        renderSelected();
+      };
+    });
+  }
+  function renderSelected() {
+    const fab = $('#selFab');
+    if (!fab) return;
+    if (!state.selected.size) { fab.innerHTML = ''; return; }
+    fab.innerHTML = `<div class="fab"><span>已选 <span class="count">${state.selected.size}</span> 条</span><button class="btn primary sm" id="btnPush">推送到 2dland →</button></div>`;
+    $('#btnPush').onclick = doPush;
+  }
+  async function doPush() {
+    const items = Array.from(state.selected.values());
+    const btn = $('#btnPush');
+    btn.disabled = true; btn.textContent = '推送中…';
+    const { ok, data } = await api.post('/api/push', { magnets: items });
+    if (!ok) { toast(data.error || '推送失败', 'error'); btn.disabled = false; btn.textContent = '推送到 2dland →'; return; }
+    showPushResult(data);
+    state.selected.clear();
+    $$('.mag.checked').forEach(el => el.classList.remove('checked'));
+    $$('.mag input[type=checkbox]').forEach(cb => cb.checked = false);
+    renderSelected();
+  }
+  function showPushResult(data) {
+    const okN = data.items.filter(x => x.ok).length;
+    const failN = data.items.length - okN;
+    const root = $('#modal-root');
+    root.innerHTML = `
+    <div class="modal-mask" id="pushMask">
+      <div class="modal">
+        <div class="modal-head"><h3>推送结果</h3><button class="icon-btn" id="closePushX">✕</button></div>
+        <div class="modal-body">
+          <div class="row gap-sm mb-12">
+            <span class="pill ok"><span class="dot"></span>${okN} 成功</span>
+            ${failN > 0 ? `<span class="pill err"><span class="dot"></span>${failN} 失败</span>` : ''}
+          </div>
+          <div style="max-height:320px;overflow:auto">
+            ${data.items.map(x => `
+              <div class="task">
+                <div class="t-name">
+                  <div>${esc(x.folder)}${x.season ? ' / ' + esc(x.season) : ''}</div>
+                  <div class="muted text-xs">${esc(x.name)}</div>
+                  ${x.ok ? '' : `<div class="err-text text-xs">⚠ ${esc(x.error)}</div>`}
+                </div>
+                <span class="pill ${x.ok ? 'ok' : 'err'}">${x.ok ? '成功' : '失败'}</span>
+              </div>`).join('')}
+          </div>
+        </div>
+        <div class="modal-foot"><button class="btn primary" id="closePush">关闭</button></div>
+      </div>
+    </div>`;
+    const close = () => root.innerHTML = '';
+    $('#closePush').onclick = close;
+    $('#closePushX').onclick = close;
+    $('#pushMask').onclick = e => { if (e.target.id === 'pushMask') close(); };
+  }
+
+  // ============ 视图：任务 ============
+  function viewTasks() {
+    return `
+    <div class="page-head">
+      <div><h2>离线任务</h2><div class="desc">查看 2dland 离线下载队列与进度</div></div>
+      <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
+    </div>
+    <div class="card"><div id="tasksList" class="muted text-sm"><span class="spinner"></span> 加载中…</div></div>`;
+  }
+  function bindTasks() { $('#btnRefreshTasks').onclick = loadTasks; }
+  async function loadTasks() {
+    const box = $('#tasksList');
+    if (!box) return;
+    box.innerHTML = '<span class="spinner"></span> 加载中…';
+    const { ok, data } = await api.get('/api/tasks');
+    if (!ok) { box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
+    if (!data || !data.length) { box.innerHTML = '<div class="empty"><div class="ico">📋</div>暂无离线任务</div>'; return; }
+    box.innerHTML = data.map(t => {
+      const pct = t.progress || 0;
+      return `<div class="task">
+        <div class="t-name">${esc(t.name || t.url || '未命名')}</div>
+        <div class="progress"><span style="width:${pct}%"></span></div>
+        <div class="pct">${pct}%</div>
+        <span class="pill">${esc(taskStatus(t.status))}</span>
+      </div>`;
+    }).join('');
+  }
+
+  // ============ 视图：设置 ============
+  function viewSettingsLoading() {
+    return `<div class="card"><span class="spinner"></span> 加载设置中…</div>`;
+  }
+  function viewSettings() {
+    const s = state.settings;
+    if (!s) return viewSettingsLoading();
+    return `
+    <div class="page-head">
+      <div><h2>设置</h2><div class="desc">所有配置均在此处管理，无需手动编辑 config 文件</div></div>
+    </div>
+
+    <div class="card">
+      <h3>🔐 访问安全</h3>
+      <div class="sub">${s.has_access_password ? '已设置访问密码' : '尚未设置访问密码（建议设置）'}</div>
+      <div class="field">
+        <label>新访问密码</label>
+        <input type="password" id="access_password" class="input" placeholder="${s.has_access_password ? '留空则不修改' : '设置访问密码'}" autocomplete="new-password">
+        <div class="help">修改后需用新密码重新登录本控制台。</div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>🌐 2dland 连接</h3>
+      <div class="sub">配置开放平台凭证后，可在下方直接发起设备码登录。</div>
+      <div class="field-row">
+        <div class="field"><label>Client ID</label><input id="client_id" class="input" value="${esc(s.client_id || '')}"></div>
+        <div class="field"><label>Client Secret</label><input type="password" id="client_secret" class="input" value="${esc(s.client_secret || '')}" placeholder="修改凭证时填写"></div>
+      </div>
+      <div id="login2dland"></div>
+    </div>
+
+    <div class="card">
+      <h3>🎬 TMDB 标题规范化</h3>
+      <div class="sub">借助 TMDB 获取标准片名与年份，构建规范的目录结构。TMDB 在国内通常需通过代理访问。</div>
+      <div class="field-row">
+        <div class="field"><label>API Key</label><input id="tmdb_api_key" class="input" value="${esc(s.tmdb_api_key || '')}" placeholder="themoviedb.org 申请"></div>
+        <div class="field"><label>语言</label><input id="tmdb_language" class="input" value="${esc(s.tmdb_language || 'zh-CN')}"></div>
+      </div>
+      <div class="field"><label>代理服务器</label><input id="tmdb_proxy" class="input" value="${esc(s.tmdb_proxy || '')}" placeholder="如 http://127.0.0.1:7890"></div>
+      <div class="row">
+        <button class="btn" id="btnTestTmdb">🔌 测试连接</button>
+        <span id="tmdbTestResult" class="text-sm muted"></span>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3>📁 下载与目录</h3>
+      <div class="field-row">
+        <div class="field"><label>2dland 根目录名</label><input id="base_dir" class="input" value="${esc(s.base_dir || '6v下载')}"></div>
+        <div class="field"><label>每分类最大翻页数</label><input type="number" id="max_pages" class="input" value="${esc(s.max_pages || 8)}" min="1" max="50"></div>
+      </div>
+      <div class="help">目录结构：电影 = 根目录 / 分类 / 标题(年份)；剧集 = 根目录 / 分类 / 标题(年份) / 第N季。</div>
+    </div>
+
+    <div class="row end">
+      <button class="btn primary lg" id="btnSaveSettings">💾 保存设置</button>
+    </div>`;
+  }
+  function bindSettings() {
+    render2dlandLogin();
+    $('#btnSaveSettings').onclick = saveSettings;
+    $('#btnTestTmdb').onclick = testTmdb;
+  }
+  function render2dlandLogin() {
+    const box = $('#login2dland');
+    if (!box || !state.settings) return;
+    const s = state.settings;
+    if (s.logged_in_2dland) {
+      box.innerHTML = `
+      <div class="login-card">
+        <div class="row between">
+          <span class="pill ok"><span class="dot"></span>2dland 已登录</span>
+          <button class="btn sm danger" id="btn2dlandLogout">退出 2dland 登录</button>
+        </div>
+      </div>`;
+      $('#btn2dlandLogout').onclick = async () => {
+        const { ok, data } = await api.post('/api/auth/logout');
+        if (!ok) { toast(data.error || '退出失败', 'error'); return; }
+        toast('已退出 2dland 登录', 'success');
+        await refreshAuth();
+        await loadSettings();
+      };
+    } else if (s.has_credentials) {
+      box.innerHTML = `
+      <div class="login-card">
+        <div class="step"><span class="num">1</span><div>点击下方按钮发起设备码授权</div></div>
+        <button class="btn primary" id="btn2dlandLogin">🔑 登录 2dland</button>
+      </div>`;
+      $('#btn2dlandLogin').onclick = start2dlandLogin;
+    } else {
+      box.innerHTML = `<div class="login-card muted text-sm">请先填写并保存 Client ID / Client Secret，再进行 2dland 登录。</div>`;
+    }
+  }
+  async function start2dlandLogin() {
+    const btn = $('#btn2dlandLogin');
+    if (btn) btn.disabled = true;
+    const { ok, data } = await api.post('/api/auth/login');
+    if (!ok) { toast(data.error || '发起登录失败', 'error'); if (btn) btn.disabled = false; return; }
+    showLoginModal(data);
+  }
+  function showLoginModal(data) {
+    const root = $('#modal-root');
+    root.innerHTML = `
+    <div class="modal-mask" id="loginMask">
+      <div class="modal">
+        <div class="modal-head"><h3>登录 2dland</h3><button class="icon-btn" id="closeLoginX">✕</button></div>
+        <div class="modal-body">
+          <div class="step"><span class="num">1</span><div>在浏览器中打开下方地址：</div></div>
+          <div class="link-box"><a href="${esc(data.verification_uri)}" target="_blank">${esc(data.verification_uri)}</a><button class="btn sm ghost" id="copyLink">复制</button></div>
+          <div class="step mt-12"><span class="num">2</span><div>输入以下用户码（点击复制）：</div></div>
+          <div class="code-box" id="userCode" title="点击复制">${esc(data.user_code)}</div>
+          <div class="step mt-12"><span class="num">3</span><div id="loginState" class="muted text-sm">等待授权完成…</div></div>
+        </div>
+        <div class="modal-foot"><button class="btn" id="cancelLogin">关闭</button></div>
+      </div>
+    </div>`;
+    const close = () => { if (state.pollTimer) { clearInterval(state.pollTimer); state.pollTimer = null; } root.innerHTML = ''; };
+    $('#closeLoginX').onclick = close;
+    $('#cancelLogin').onclick = close;
+    $('#copyLink').onclick = () => copy(data.verification_uri);
+    $('#userCode').onclick = () => copy(data.user_code);
+    const interval = (data.interval || 5) * 1000;
+    state.pollTimer = setInterval(async () => {
+      const { ok, data: d } = await api.get('/api/auth/poll');
+      if (!ok) return;
+      const st = $('#loginState');
+      if (st) st.textContent = '状态：' + d.status + '…';
+      if (d.logged_in) {
+        close();
+        toast('2dland 登录成功！', 'success');
+        await refreshAuth();
+        await loadSettings();
+      }
+    }, interval);
+  }
+  async function saveSettings() {
+    const body = {
+      access_password: $('#access_password').value,
+      client_id: $('#client_id').value.trim(),
+      client_secret: $('#client_secret').value.trim(),
+      tmdb_api_key: $('#tmdb_api_key').value.trim(),
+      tmdb_proxy: $('#tmdb_proxy').value.trim(),
+      tmdb_language: $('#tmdb_language').value.trim() || 'zh-CN',
+      max_pages: parseInt($('#max_pages').value) || 0,
+      base_dir: $('#base_dir').value.trim(),
+    };
+    const btn = $('#btnSaveSettings');
+    btn.disabled = true; btn.textContent = '保存中…';
+    const { ok, data } = await api.post('/api/settings', body);
+    btn.disabled = false; btn.textContent = '💾 保存设置';
+    if (!ok) { toast(data.error || '保存失败', 'error'); return; }
+    toast('设置已保存', 'success');
+    if (data.relogin_needed) toast('2dland 凭证已变更，请重新登录 2dland', 'warn', 5000);
+    await refreshAuth();
+    await loadSettings();
+    if (body.access_password) {
+      state.uiSession.logged_in = false;
+      render();
+    }
+  }
+  async function testTmdb() {
+    const body = {
+      tmdb_api_key: $('#tmdb_api_key').value.trim(),
+      tmdb_proxy: $('#tmdb_proxy').value.trim(),
+      tmdb_language: $('#tmdb_language').value.trim(),
+    };
+    const btn = $('#btnTestTmdb'), res = $('#tmdbTestResult');
+    btn.disabled = true;
+    res.innerHTML = '<span class="spinner"></span> 测试中…';
+    const { ok, data } = await api.post('/api/settings/test', body);
+    btn.disabled = false;
+    if (!ok) { res.innerHTML = `<span class="err-text">✗ ${esc(data.error || '测试失败')}</span>`; return; }
+    if (data.ok) {
+      res.innerHTML = `<span class="ok-text">✓ 连接成功${data.title ? '，命中：' + esc(data.title) : ''}（${data.duration_ms}ms）</span>`;
+    } else {
+      res.innerHTML = `<span class="err-text">✗ 失败：${esc(data.error || '未知错误')}</span>`;
+    }
+  }
+  async function loadSettings() {
+    const { ok, data } = await api.get('/api/settings');
+    if (!ok) return;
+    state.settings = data;
+    if (state.view === 'settings') {
+      $('#content').innerHTML = viewSettings();
+      bindSettings();
+    }
+  }
+
+  // ============ 公共：刷新 2dland 登录状态 ============
+  async function refreshAuth() {
+    const { ok, data } = await api.get('/api/auth/status');
+    if (ok) state.auth = data;
+  }
+
+  // ============ 启动 ============
+  init();
+})();

@@ -45,36 +45,36 @@ func sanitize(name string) string {
 	return s
 }
 
-// EnsureFolderByCategory 按 /<baseDir>/<分类>/<标题>[/<季>] 建目录。
+// ensureFolderByCategory 按 /<baseDir>/<分类>/<标题>[/<季>] 建目录。
 // 剧集类建立第三级 seasonName 目录；电影类忽略 seasonName，止于标题目录。
-func (c *Client) EnsureFolderByCategory(ctx context.Context, category, titleName, seasonName string) (string, error) {
-	base, err := c.ensureDir(ctx, "/", c.baseDir)
+func ensureFolderByCategory(ctx context.Context, s snapshot, category, titleName, seasonName string) (string, error) {
+	base, err := ensureDir(ctx, s.userfile, "/", s.baseDir)
 	if err != nil {
 		return "", err
 	}
-	cat, err := c.ensureDir(ctx, base, categoryName(category))
+	cat, err := ensureDir(ctx, s.userfile, base, categoryName(category))
 	if err != nil {
 		return "", err
 	}
-	titlePath, err := c.ensureDir(ctx, cat, titleName)
+	titlePath, err := ensureDir(ctx, s.userfile, cat, titleName)
 	if err != nil {
 		return "", err
 	}
 	if isTVCategory(category) && seasonName != "" {
-		return c.ensureDir(ctx, titlePath, seasonName)
+		return ensureDir(ctx, s.userfile, titlePath, seasonName)
 	}
 	return titlePath, nil
 }
 
 // ensureDir 在 parentPath 下确保名为 name 的目录存在，返回其完整路径。
-func (c *Client) ensureDir(ctx context.Context, parentPath, name string) (string, error) {
-	if existing, _ := c.findDir(ctx, parentPath, name); existing != nil {
+func ensureDir(ctx context.Context, uf *userfile.UserFileService, parentPath, name string) (string, error) {
+	if existing, _ := findDir(ctx, uf, parentPath, name); existing != nil {
 		if existing.Path != "" {
 			return existing.Path, nil
 		}
 		return joinPath(parentPath, name), nil
 	}
-	created, err := c.userfile.Create(ctx, &userfile.File{
+	created, err := uf.Create(ctx, &userfile.File{
 		Name:   name,
 		Dir:    true,
 		Parent: parentPath,
@@ -89,8 +89,8 @@ func (c *Client) ensureDir(ctx context.Context, parentPath, name string) (string
 }
 
 // findDir 在 parentPath 下查找名为 name 的子目录。
-func (c *Client) findDir(ctx context.Context, parentPath, name string) (*userfile.File, error) {
-	resp, err := c.userfile.List(ctx, &userfile.FileListRequest{
+func findDir(ctx context.Context, uf *userfile.UserFileService, parentPath, name string) (*userfile.File, error) {
+	resp, err := uf.List(ctx, &userfile.FileListRequest{
 		Parent: &userfile.File{Path: parentPath},
 	})
 	if err != nil {

@@ -13,14 +13,15 @@ import (
 var webFS embed.FS
 
 func main() {
-	c, err := cfg.Load("config.json")
+	const cfgPath = "config.json"
+	c, err := cfg.Load(cfgPath)
 	if err != nil {
 		log.Fatalf("加载配置失败: %v", err)
 	}
-	if c.ClientID == "" || c.ClientSecret == "" {
-		log.Printf("警告: config.json 未填写 client_id/client_secret，请先在 2dland 开放平台申请并填写后再使用离线下载功能。")
+	if c.AccessPassword == "" {
+		log.Printf("提示: 首次启动，请在浏览器打开 http://localhost%s 完成初始化向导", c.Listen)
 	}
-	srv := server.New(c, webFS)
+	srv := server.New(c, cfgPath, webFS)
 	log.Printf("6v520 → 2dland 助手已启动，监听 %s", c.Listen)
 	if err := http.ListenAndServe(c.Listen, srv.Routes()); err != nil {
 		log.Fatalf("服务退出: %v", err)

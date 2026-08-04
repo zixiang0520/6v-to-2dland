@@ -23,15 +23,18 @@ type PollResult struct {
 
 // StartLogin 发起设备码授权流程，返回用户需在浏览器中访问的地址和 user_code。
 func (c *Client) StartLogin(ctx context.Context) (*LoginResult, error) {
-	resp, err := c.oauth.DeviceCodeAuthorize(ctx, &oauth.AuthorizeRequest{
-		ClientId: c.clientID,
+	s := c.snap()
+	resp, err := s.oauth.DeviceCodeAuthorize(ctx, &oauth.AuthorizeRequest{
+		ClientId: s.clientID,
 		Device:   "6v-to-2dland/1.0",
 	})
 	if err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
 	c.deviceCode = resp.DeviceCode
 	c.loginExpire = time.Now().Add(time.Duration(resp.ExpiresIn) * time.Second)
+	c.mu.Unlock()
 	return &LoginResult{
 		VerificationURI: resp.VerificationUri,
 		UserCode:        resp.UserCode,
@@ -42,23 +45,31 @@ func (c *Client) StartLogin(ctx context.Context) (*LoginResult, error) {
 
 // PollLogin 轮询登录状态；授权成功时落盘 token。
 func (c *Client) PollLogin(ctx context.Context) (*PollResult, error) {
-	if c.deviceCode == "" || time.Now().After(c.loginExpire) {
+	c.mu.RLock()
+	dc := c.deviceCode
+	exp := c.loginExpire
+	c.mu.RUnlock()
+	if dc == "" || time.Now().After(exp) {
 		return &PollResult{Status: "NO_LOGIN"}, nil
 	}
-	state, err := c.oauth.GetDeviceCodeState(ctx, &oauth.DeviceCodeAuthorizeState{DeviceCode: c.deviceCode})
+	s := c.snap()
+	state, err := s.oauth.GetDeviceCodeState(ctx, &oauth.DeviceCodeAuthorizeState{DeviceCode: dc})
 	if err != nil {
 		return nil, err
 	}
 	res := &PollResult{Status: state.Status, LoggedIn: state.Login}
 	if state.Status == "AUTHORIZATION_SUCCESS" && state.AccessToken != "" {
-		c.api.SetToken(state.AccessToken, state.RefreshToken, state.ExpiresIn)
+		s.api.SetToken(state.AccessToken, state.RefreshToken, state.ExpiresIn)
+		c.mu.Lock()
 		c.deviceCode = ""
+		c.mu.Unlock()
 	}
 	return res, nil
 }
 
 // LoggedIn 返回是否已有有效 token（粗略判断，实际请求时 SDK 会自动刷新）。
 func (c *Client) LoggedIn() bool {
-	t, _ := c.store.GetAccessToken()
+	s := c.snap()
+	t, _ := s.store.GetAccessToken()
 	return t != ""
 }
