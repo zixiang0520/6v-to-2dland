@@ -201,15 +201,16 @@ func (s *Server) tasks(w http.ResponseWriter, r *http.Request) {
 func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 	c := s.snapshotConfig()
 	writeJSON(w, http.StatusOK, map[string]any{
-		"client_id":          c.ClientID,
-		"client_secret":      c.ClientSecret,
+		"client_id":           c.ClientID,
+		"client_secret":       c.ClientSecret,
+		"has_credentials":      c.ClientID != "" && c.ClientSecret != "",
 		"has_access_password": c.AccessPassword != "",
-		"tmdb_api_key":       c.TmdbAPIKey,
-		"tmdb_proxy":         c.TmdbProxy,
-		"tmdb_language":      c.TmdbLang,
-		"max_pages":          c.MaxPages,
-		"base_dir":           c.BaseDir,
-		"logged_in_2dland":   s.drive.LoggedIn(),
+		"tmdb_api_key":        c.TmdbAPIKey,
+		"tmdb_proxy":          c.TmdbProxy,
+		"tmdb_language":       c.TmdbLang,
+		"max_pages":           c.MaxPages,
+		"base_dir":            c.BaseDir,
+		"logged_in_2dland":    s.drive.LoggedIn(),
 	})
 }
 
