@@ -89,3 +89,46 @@ func (c *Client) DeleteFiles(ctx context.Context, identities []string) error {
 	_, err := s.userfile.Trash(ctx, &userfile.BatchOperationRequest{Source: srcs})
 	return err
 }
+
+// ListTrash 列出回收站全部文件/目录（游标分页拉取）。
+func (c *Client) ListTrash(ctx context.Context) ([]*userfile.File, error) {
+	s := c.snap()
+	const pageSize = 50
+	var all []*userfile.File
+	var token string
+	for page := 0; ; page++ {
+		resp, err := s.userfile.ListTrash(ctx, &userfile.FileListRequest{
+			ListInfo: &model.ScanListRequest{Limit: pageSize, Token: token},
+		})
+		if err != nil {
+			if page == 0 {
+				return nil, err
+			}
+			log.Printf("ListTrash: page %d error: %v (returning %d items so far)", page, err, len(all))
+			break
+		}
+		all = append(all, resp.Files...)
+		if resp.ListInfo == nil || resp.ListInfo.Token == "" || len(resp.Files) == 0 {
+			break
+		}
+		token = resp.ListInfo.Token
+		if page > 100 {
+			break
+		}
+	}
+	return all, nil
+}
+
+// Recover 从回收站恢复一组文件/目录（按 identity）。
+func (c *Client) Recover(ctx context.Context, identities []string) error {
+	if len(identities) == 0 {
+		return errEmptyIdentity
+	}
+	s := c.snap()
+	srcs := make([]*userfile.File, 0, len(identities))
+	for _, id := range identities {
+		srcs = append(srcs, &userfile.File{Identity: id})
+	}
+	_, err := s.userfile.Recover(ctx, &userfile.BatchOperationRequest{Source: srcs})
+	return err
+}

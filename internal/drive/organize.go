@@ -188,13 +188,24 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 		}
 	}
 
-	// 删除 savePath 下的 BT 子目录（视频已移出、广告已删，子目录为 BT 残留）
+	// 删除 savePath 下的 BT 子目录（视频已移出、广告已删，子目录为 BT 残留）。
+	// 安全检查：只删除递归确认为空的子目录，防止 Move 失败时把视频一起移到回收站。
 	topFiles, err := c.ListFiles(ctx, savePath)
 	if err == nil {
 		var dirIDs []string
 		for _, f := range topFiles {
-			if f.Dir {
+			if !f.Dir {
+				continue
+			}
+			subs, subErr := c.listAllFilesRecursive(ctx, f.Path)
+			if subErr != nil {
+				log.Printf("OrganizeTask: check subdir %q failed: %v (skip)", f.Name, subErr)
+				continue
+			}
+			if len(subs) == 0 {
 				dirIDs = append(dirIDs, f.Identity)
+			} else {
+				log.Printf("OrganizeTask: skip non-empty subdir %q (%d files remain, Move may have failed)", f.Name, len(subs))
 			}
 		}
 		if len(dirIDs) > 0 {

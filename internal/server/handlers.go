@@ -40,7 +40,9 @@ func (s *Server) uiSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) uiLogin(w http.ResponseWriter, r *http.Request) {
-	var body struct{ Password string `json:"password"` }
+	var body struct {
+		Password string `json:"password"`
+	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errResp(err))
 		return
@@ -249,7 +251,7 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{
 		"client_id":           c.ClientID,
 		"client_secret":       c.ClientSecret,
-		"has_credentials":      c.ClientID != "" && c.ClientSecret != "",
+		"has_credentials":     c.ClientID != "" && c.ClientSecret != "",
 		"has_access_password": c.AccessPassword != "",
 		"tmdb_api_key":        c.TmdbAPIKey,
 		"tmdb_proxy":          c.TmdbProxy,
@@ -475,6 +477,36 @@ func (s *Server) filesDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := s.drive.DeleteFiles(r.Context(), body.Identities); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// filesTrashList 列出 2dland 回收站全部文件/目录。
+func (s *Server) filesTrashList(w http.ResponseWriter, r *http.Request) {
+	files, err := s.drive.ListTrash(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
+// filesRecover 从回收站恢复文件/目录。
+func (s *Server) filesRecover(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Identities []string `json:"identities"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if len(body.Identities) == 0 {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少 identities"))
+		return
+	}
+	if err := s.drive.Recover(r.Context(), body.Identities); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errResp(err))
 		return
 	}
