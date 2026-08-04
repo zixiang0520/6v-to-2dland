@@ -40,12 +40,17 @@ func (c *Client) ListFiles(ctx context.Context, parentPath string) ([]*userfile.
 }
 
 // Mkdir 在 parentPath 下创建名为 name 的文件夹，返回创建后的文件信息。
+// 注意：2dland Create 的 Parent 字段需要 identity（不是 path），否则创建到根目录。
 func (c *Client) Mkdir(ctx context.Context, parentPath, name string) (*userfile.File, error) {
 	s := c.snap()
+	parent, err := s.userfile.Get(ctx, &userfile.File{Path: parentPath})
+	if err != nil || parent == nil || parent.Identity == "" {
+		return nil, fmt.Errorf("父目录 %q 不存在: %v", parentPath, err)
+	}
 	f, err := s.userfile.Create(ctx, &userfile.File{
 		Name:   name,
 		Dir:    true,
-		Parent: parentPath,
+		Parent: parent.Identity,
 	})
 	if err != nil {
 		return nil, err
