@@ -115,6 +115,8 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/magnets", s.requireAuth(s.magnets))
 	mux.HandleFunc("POST /api/push", s.requireAuth(s.push))
 	mux.HandleFunc("GET /api/tasks", s.requireAuth(s.tasks))
+	mux.HandleFunc("POST /api/tasks/delete", s.requireAuth(s.deleteTask))
+	mux.HandleFunc("POST /api/tasks/clear", s.requireAuth(s.clearTasks))
 	mux.HandleFunc("GET /api/settings", s.requireAuth(s.settingsGet))
 	mux.HandleFunc("POST /api/settings", s.requireAuth(s.settingsPost))
 	mux.HandleFunc("POST /api/settings/test", s.requireAuth(s.settingsTest))

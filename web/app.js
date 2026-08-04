@@ -380,12 +380,18 @@
   function viewTasks() {
     return `
     <div class="page-head">
-      <div><h2>离线任务</h2><div class="desc">查看 2dland 离线下载队列与进度</div></div>
-      <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
+      <div><h2>离线任务</h2><div class="desc">查看 2dland 离线下载队列；删除任务会同步到 2dland</div></div>
+      <div class="row gap-sm">
+        <button class="btn" id="btnClearDone" title="删除所有已完成的任务">🧹 清除已完成</button>
+        <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
+      </div>
     </div>
     <div class="card"><div id="tasksList" class="muted text-sm"><span class="spinner"></span> 加载中…</div></div>`;
   }
-  function bindTasks() { $('#btnRefreshTasks').onclick = loadTasks; }
+  function bindTasks() {
+    $('#btnRefreshTasks').onclick = loadTasks;
+    $('#btnClearDone').onclick = clearCompleted;
+  }
   async function loadTasks() {
     const box = $('#tasksList');
     if (!box) return;
@@ -393,15 +399,77 @@
     const { ok, data } = await api.get('/api/tasks');
     if (!ok) { box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
     if (!data || !data.length) { box.innerHTML = '<div class="empty"><div class="ico">📋</div>暂无离线任务</div>'; return; }
+    const doneN = data.filter(t => t.status === 2).length;
+    const clearBtn = $('#btnClearDone');
+    if (clearBtn) clearBtn.disabled = doneN === 0;
     box.innerHTML = data.map(t => {
       const pct = t.progress || 0;
+      const sCls = t.status === 2 ? 'ok' : (t.status === 3 ? 'err' : (t.status === 1 ? 'warn' : ''));
+      const name = t.name || t.url || '未命名';
       return `<div class="task">
-        <div class="t-name">${esc(t.name || t.url || '未命名')}</div>
+        <div class="t-name">
+          <div>${esc(name)}</div>
+          ${t.save_path ? `<div class="muted text-xs" title="${esc(t.save_path)}">📁 ${esc(t.save_path)}</div>` : ''}
+        </div>
         <div class="progress"><span style="width:${pct}%"></span></div>
         <div class="pct">${pct}%</div>
-        <span class="pill">${esc(taskStatus(t.status))}</span>
+        <span class="pill ${sCls}">${esc(taskStatus(t.status))}</span>
+        <button class="icon-btn t-del" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="删除此任务">🗑</button>
       </div>`;
     }).join('');
+    $$('.t-del').forEach(b => b.onclick = () => deleteTask(b.dataset.id, b.dataset.name));
+  }
+  async function deleteTask(identity, name) {
+    const r = await confirmDialog({
+      title: '删除任务',
+      message: `确定要删除任务「<b>${esc(name)}</b>」吗？`,
+    });
+    if (!r.ok) return;
+    const { ok, data } = await api.post('/api/tasks/delete', { identity, delete_files: r.checked });
+    if (!ok) { toast(data.error || '删除失败', 'error'); return; }
+    toast(r.checked ? '已删除任务及文件' : '已删除任务', 'success');
+    loadTasks();
+  }
+  async function clearCompleted() {
+    const r = await confirmDialog({
+      title: '清除已完成任务',
+      message: `确定要清除所有 <b>已完成</b> 的离线任务吗？等待中 / 下载中 / 失败的任务不会被清除。`,
+      confirmText: '清除',
+    });
+    if (!r.ok) return;
+    const btn = $('#btnClearDone');
+    const old = btn.textContent;
+    btn.disabled = true; btn.textContent = '清除中…';
+    const { ok, data } = await api.post('/api/tasks/clear', { delete_files: r.checked });
+    btn.disabled = false; btn.textContent = old;
+    if (!ok) { toast(data.error || '清除失败', 'error'); return; }
+    toast(`已清除 ${data.deleted || 0} 条已完成任务`, 'success');
+    loadTasks();
+  }
+  // confirmDialog 通用确认弹窗，返回 { ok, checked }。
+  function confirmDialog({ title, message, confirmText = '删除', danger = true, checkboxLabel = '同时删除已下载的文件' }) {
+    return new Promise(resolve => {
+      const root = $('#modal-root');
+      root.innerHTML = `
+      <div class="modal-mask" id="confirmMask">
+        <div class="modal">
+          <div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" id="confirmX">✕</button></div>
+          <div class="modal-body">
+            <div>${message}</div>
+            ${checkboxLabel ? `<label class="checkbox mt-12"><input type="checkbox" id="confirmCb"> ${esc(checkboxLabel)}</label>` : ''}
+          </div>
+          <div class="modal-foot">
+            <button class="btn" id="confirmCancel">取消</button>
+            <button class="btn ${danger ? 'danger' : 'primary'}" id="confirmOk">${esc(confirmText)}</button>
+          </div>
+        </div>
+      </div>`;
+      const close = res => { root.innerHTML = ''; resolve(res); };
+      $('#confirmOk').onclick = () => close({ ok: true, checked: $('#confirmCb') ? $('#confirmCb').checked : false });
+      $('#confirmCancel').onclick = () => close({ ok: false });
+      $('#confirmX').onclick = () => close({ ok: false });
+      $('#confirmMask').onclick = e => { if (e.target.id === 'confirmMask') close({ ok: false }); };
+    });
   }
 
   // ============ 视图：设置 ============

@@ -197,6 +197,41 @@ func (s *Server) tasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tasks)
 }
 
+// deleteTask 删除单个离线任务（同步到 2dland）。
+func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Identity    string `json:"identity"`
+		DeleteFiles bool   `json:"delete_files"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if body.Identity == "" {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少 identity"))
+		return
+	}
+	if err := s.drive.DeleteTask(r.Context(), body.Identity, body.DeleteFiles); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// clearTasks 一键清除所有已完成任务（同步到 2dland）。
+func (s *Server) clearTasks(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		DeleteFiles bool `json:"delete_files"`
+	}
+	_ = decodeJSON(r, &body)
+	n, err := s.drive.ClearCompletedTasks(r.Context(), body.DeleteFiles)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "deleted": n})
+}
+
 // ---------- 设置 ----------
 func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 	c := s.snapshotConfig()
