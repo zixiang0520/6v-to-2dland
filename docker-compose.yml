@@ -11,7 +11,8 @@ services:
     container_name: 6v-to-2dland
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      # 宿主端口可用 .env 的 HOST_PORT 覆盖（默认 8080），如生产用 28080
+      - "${HOST_PORT:-8080}:8080"
     volumes:
       # 配置 + token 持久化目录（config.json 放在此目录内）
       - ./data:/app/data
