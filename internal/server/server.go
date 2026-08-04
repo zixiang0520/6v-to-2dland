@@ -117,6 +117,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/push", s.requireAuth(s.push))
 	mux.HandleFunc("GET /api/tasks", s.requireAuth(s.tasks))
 	mux.HandleFunc("POST /api/tasks/delete", s.requireAuth(s.deleteTask))
+	mux.HandleFunc("POST /api/tasks/organize", s.requireAuth(s.taskOrganize))
 	// 文件管理（直接管理 2dland 网盘）
 	mux.HandleFunc("GET /api/files", s.requireAuth(s.filesList))
 	mux.HandleFunc("POST /api/files/mkdir", s.requireAuth(s.filesMkdir))

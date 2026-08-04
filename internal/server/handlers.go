@@ -219,6 +219,30 @@ func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// taskOrganize 整理一个已完成任务下载的文件：删除广告文件 + 规范化视频文件名。
+// 请求体 { save_path } 为任务保存目录，前端任务列表已持有该字段。
+func (s *Server) taskOrganize(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		SavePath string `json:"save_path"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if body.SavePath == "" {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少 save_path"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	res, err := s.drive.OrganizeTask(ctx, body.SavePath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
+}
+
 // ---------- 设置 ----------
 func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 	c := s.snapshotConfig()

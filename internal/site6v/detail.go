@@ -16,7 +16,7 @@ func (c *Client) FetchMagnets(ctx context.Context, detailURL string) ([]Magnet, 
 		return nil, ctx.Err()
 	default:
 	}
-	page, err := c.Get(detailURL)
+	page, err := c.GetCtx(ctx, detailURL)
 	if err != nil {
 		return nil, err
 	}

@@ -24,8 +24,8 @@ func categoryCNName(cat string) string {
 
 // FetchBrowse 抓取分类的列表页，每个分类取前 perCategory 条。
 // 用于发现页：按分类浏览 6v520 的资源（列表页无封面图，前端用文字列表展示）。
-//   - cat 为空：并发爬取全部 11 个分类（首屏，perCategory 默认 20）。
-//   - cat 非空：仅爬取该分类（用户点击分类标签后展开，perCategory 默认 100）。
+//   - cat 为空：并发爬取全部 11 个分类，perCategory 默认 100。
+//   - cat 非空：仅爬取该分类（用户点击分类标签后切换展示），perCategory 默认 100。
 //
 // 单分类内串行翻页直到收够 perCategory 条或无更多页。
 func (c *Client) FetchBrowse(ctx context.Context, perCategory int, cat string) ([]BrowseCategory, error) {
@@ -34,13 +34,9 @@ func (c *Client) FetchBrowse(ctx context.Context, perCategory int, cat string) (
 		return nil, ctx.Err()
 	default:
 	}
-	// 默认条数：首屏（全部分类）20 条，单分类展开 100 条
+	// 默认每分类前 100 条（取消 20/100 两档加载，直接一次拉满）
 	if perCategory <= 0 {
-		if cat == "" {
-			perCategory = 20
-		} else {
-			perCategory = 100
-		}
+		perCategory = 100
 	}
 
 	// 选择要爬取的分类列表
@@ -122,7 +118,7 @@ func (c *Client) fetchCategoryTopN(ctx context.Context, cat string, n int) []Res
 		} else {
 			u = c.Base + "/" + cat + "/index_" + strconv.Itoa(page) + ".html"
 		}
-		htmlText, err := c.Get(u)
+		htmlText, err := c.GetCtx(ctx, u)
 		if err != nil {
 			break
 		}

@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
-	"golang.org/x/text/transform"
 )
 
 // categories 是 6v520.com 的全部资源分类目录名（列表页爬取 fallback 用）。
@@ -97,7 +96,7 @@ func (c *Client) searchByAPI(ctx context.Context, keyword string) []Resource {
 // postSearch POST 表单到站内搜索接口。
 // EmpireCMS 流程：POST /e/search/index.php → 302 到 result/?searchid=xxx → GET result 页。
 // 注意：不能让 http.Client 自动跟随 302，因为 GET 请求无 Content-Length 会触发 WAF 411。
-// 这里禁用重定向，手动解析 Location 后用 getGBK 取结果页。
+// 这里禁用重定向，手动解析 Location 后用 GetCtx 取结果页。
 func (c *Client) postSearch(ctx context.Context, keyword string) (string, error) {
 	kwEnc, err := encodeGbkUri(keyword)
 	if err != nil {
@@ -105,25 +104,9 @@ func (c *Client) postSearch(ctx context.Context, keyword string) (string, error)
 	}
 	body := "show=title,smalltext&tempid=1&tbname=article&keyboard=" + kwEnc
 
-	// 禁用自动重定向的专用 client，共享主 client 的 cookie jar（拿 lastsearchtime cookie）
-	client := &http.Client{
-		Timeout: c.HTTP.Timeout,
-		Jar:     c.HTTP.Jar,
-		CheckRedirect: func(*http.Request, []*http.Request) error {
-			return http.ErrUseLastResponse
-		},
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.Base+"/e/search/index.php", strings.NewReader(body))
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", ua)
-	req.Header.Set("Referer", c.Base+"/")
-	req.Header.Set("Origin", c.Base)
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded; charset=gb2312")
-
-	resp, err := client.Do(req)
+	htmlText, resp, err := c.PostFormCtx(ctx, c.Base+"/e/search/index.php", body, func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	})
 	if err != nil {
 		return "", err
 	}
@@ -140,36 +123,12 @@ func (c *Client) postSearch(ctx context.Context, keyword string) (string, error)
 		if err != nil {
 			return "", nil
 		}
-		return c.getGBK(ctx, resultURL)
+		return c.GetCtx(ctx, resultURL)
 	}
 
-	// 非 302：直接读响应（可能是错误页/频控提示页）
-	defer resp.Body.Close()
-	b, err := io.ReadAll(transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder()))
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
-}
-
-// getGBK 以 GET 抓取 url 并以 GBK 解码返回 HTML（带 context）。
-func (c *Client) getGBK(ctx context.Context, u string) (string, error) {
-	req, err := http.NewRequestWithContext(ctx, "GET", u, nil)
-	if err != nil {
-		return "", err
-	}
-	req.Header.Set("User-Agent", ua)
-	req.Header.Set("Referer", c.Base+"/")
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer resp.Body.Close()
-	b, err := io.ReadAll(transform.NewReader(resp.Body, simplifiedchinese.GBK.NewDecoder()))
-	if err != nil {
-		return "", err
-	}
-	return string(b), nil
+	// 非 302：直接返回已解码的响应（可能是错误页/频控提示页）
+	resp.Body.Close()
+	return htmlText, nil
 }
 
 // resolveURL 把相对路径 ref 基于 base 解析为绝对 URL。
@@ -324,7 +283,7 @@ func (c *Client) searchCategory(ctx context.Context, cat, kw string, maxPages in
 		} else {
 			u = c.Base + "/" + cat + "/index_" + strconv.Itoa(page) + ".html"
 		}
-		htmlText, err := c.Get(u)
+		htmlText, err := c.GetCtx(ctx, u)
 		if err != nil {
 			break
 		}

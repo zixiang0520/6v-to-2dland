@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"6v-to-2dland/internal/tmdb"
+
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/model"
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/offline"
 )
@@ -171,15 +172,24 @@ func (c *Client) ListTasks(ctx context.Context) ([]*offline.UserTask, error) {
 }
 
 // DeleteTask 删除一个或多个离线任务（同步到 2dland）。deleteFiles 为 true 时同时删除已下载的文件。
+//
+// 注意：SDK 的 OfflineTaskDeleteRequest.DeleteFiles 带 json:",omitempty"，
+// bool 零值 false 会被序列化时丢弃字段，导致 2dland 服务端使用默认值（删除文件）。
+// 这里绕过 SDK 结构体，直接用 map 构造请求体，确保 delete_files=false 显式出现在 JSON 中。
 func (c *Client) DeleteTask(ctx context.Context, identities []string, deleteFiles bool) error {
 	if len(identities) == 0 {
 		return errEmptyIdentity
 	}
 	s := c.snap()
-	_, err := s.offline.Delete(ctx, &offline.OfflineTaskDeleteRequest{
-		Identity:    identities,
-		DeleteFiles: deleteFiles,
-	})
+	body := map[string]any{
+		"identity":     identities,
+		"delete_files": deleteFiles,
+	}
+	result := struct {
+		Count int64 `json:"count,string"`
+	}{}
+	err := s.api.Post(ctx, "/v6/offline_task/delete", nil, body, &result)
+	log.Printf("DeleteTask: identities=%d delete_files=%v -> count=%d err=%v", len(identities), deleteFiles, result.Count, err)
 	return err
 }
 
