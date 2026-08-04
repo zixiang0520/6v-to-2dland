@@ -582,8 +582,9 @@
       <h3>📁 下载与目录</h3>
       <div class="field-row">
         <div class="field"><label>2dland 根目录名</label><input id="base_dir" class="input" value="${esc(s.base_dir || '6v下载')}"></div>
-        <div class="field"><label>每分类最大翻页数</label><input type="number" id="max_pages" class="input" value="${esc(s.max_pages || 8)}" min="1" max="50"></div>
+        <div class="field"><label>每分类最大翻页数（备用）</label><input type="number" id="max_pages" class="input" value="${esc(s.max_pages || 8)}" min="1" max="50"></div>
       </div>
+      <div class="help">⚠️ 每分类最大翻页数：仅当站内搜索无结果、回退到列表页爬取时生效。正常搜索用不到此选项，保持默认 8 即可。</div>
       <div class="help">目录结构：电影 = 根目录 / 分类 / 标题(年份)；剧集 = 根目录 / 分类 / 标题(年份) / 第N季。</div>
     </div>
 
