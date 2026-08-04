@@ -56,6 +56,7 @@
     fileItems: [],          // 当前目录文件列表
     theme: 'auto',
     pollTimer: null,
+    taskRefreshTimer: null,  // 任务页自动刷新定时器
   };
 
   // ============ 主题 ============
@@ -125,6 +126,7 @@
   function renderContent() {
     const c = $('#content');
     if (!c) return;
+    if (state.view !== 'tasks') stopTaskAutoRefresh();
     if (state.view === 'tasks') { c.innerHTML = viewTasks(); bindTasks(); loadTasks(); }
     else if (state.view === 'files') { c.innerHTML = viewFiles(); bindFiles(); loadFiles(); }
     else if (state.view === 'settings') { c.innerHTML = viewSettingsLoading(); loadSettings(); }
@@ -251,6 +253,7 @@
       await api.post('/api/ui/logout');
       state.uiSession = { auth_required: true, logged_in: false };
       state.selected.clear();
+      stopTaskAutoRefresh();
       render();
     };
   }
@@ -387,10 +390,16 @@
   // ============ 视图：任务 ============
   const TASK_PAGE_SIZE = 50;
   function viewTasks() {
+    const arOn = localStorage.getItem('task_auto_refresh') === '1';
+    const arSec = parseInt(localStorage.getItem('task_refresh_sec')) || 10;
     return `
     <div class="page-head">
       <div><h2>离线任务</h2><div class="desc">查看 2dland 全部离线下载任务；删除任务会同步到 2dland</div></div>
       <div class="row gap-sm">
+        <label class="auto-refresh" title="开启后任务列表按设定秒数自动刷新">
+          <input type="checkbox" id="autoRefresh" ${arOn ? 'checked' : ''}> 自动刷新
+          <input type="number" id="refreshSec" class="input-num" value="${arSec}" min="3" max="3600"> 秒
+        </label>
         <button class="btn danger" id="btnBatchDel" disabled>🗑 批量删除 <span id="selCount">0</span></button>
         <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
       </div>
@@ -398,19 +407,35 @@
     <div class="card"><div id="tasksList" class="muted text-sm"><span class="spinner"></span> 加载中…</div></div>`;
   }
   function bindTasks() {
-    $('#btnRefreshTasks').onclick = loadTasks;
+    $('#btnRefreshTasks').onclick = () => loadTasks();
     $('#btnBatchDel').onclick = batchDelete;
+    const cb = $('#autoRefresh'), sec = $('#refreshSec');
+    if (cb) cb.onchange = () => { localStorage.setItem('task_auto_refresh', cb.checked ? '1' : '0'); startTaskAutoRefresh(); };
+    if (sec) sec.onchange = () => { const v = Math.max(3, parseInt(sec.value) || 10); sec.value = v; localStorage.setItem('task_refresh_sec', String(v)); startTaskAutoRefresh(); };
+    startTaskAutoRefresh();
   }
-  async function loadTasks() {
+  // 自动刷新：按设定秒数定时拉取任务（保留选中与页码，不闪屏）。
+  function startTaskAutoRefresh() {
+    stopTaskAutoRefresh();
+    if (localStorage.getItem('task_auto_refresh') !== '1') return;
+    const sec = Math.max(3, parseInt(localStorage.getItem('task_refresh_sec')) || 10);
+    state.taskRefreshTimer = setInterval(() => loadTasks(true), sec * 1000);
+  }
+  function stopTaskAutoRefresh() {
+    if (state.taskRefreshTimer) { clearInterval(state.taskRefreshTimer); state.taskRefreshTimer = null; }
+  }
+  async function loadTasks(keepSel) {
     const box = $('#tasksList');
     if (!box) return;
-    box.innerHTML = '<span class="spinner"></span> 加载中…';
-    state.taskSel.clear();
-    updateSelUI();
+    if (!keepSel) {
+      box.innerHTML = '<span class="spinner"></span> 加载中…';
+      state.taskSel.clear();
+      updateSelUI();
+    }
     const { ok, data } = await api.get('/api/tasks');
-    if (!ok) { box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
+    if (!ok) { if (!keepSel) box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
     state.taskAll = data || [];
-    state.taskPage = 1;
+    if (!keepSel) state.taskPage = 1;
     renderTaskPage();
   }
   function renderTaskPage() {
