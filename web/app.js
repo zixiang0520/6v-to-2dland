@@ -381,17 +381,11 @@
     return `
     <div class="page-head">
       <div><h2>离线任务</h2><div class="desc">查看 2dland 离线下载队列；删除任务会同步到 2dland</div></div>
-      <div class="row gap-sm">
-        <button class="btn" id="btnClearDone" title="删除所有已完成的任务">🧹 清除已完成</button>
-        <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
-      </div>
+      <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
     </div>
     <div class="card"><div id="tasksList" class="muted text-sm"><span class="spinner"></span> 加载中…</div></div>`;
   }
-  function bindTasks() {
-    $('#btnRefreshTasks').onclick = loadTasks;
-    $('#btnClearDone').onclick = clearCompleted;
-  }
+  function bindTasks() { $('#btnRefreshTasks').onclick = loadTasks; }
   async function loadTasks() {
     const box = $('#tasksList');
     if (!box) return;
@@ -399,9 +393,6 @@
     const { ok, data } = await api.get('/api/tasks');
     if (!ok) { box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
     if (!data || !data.length) { box.innerHTML = '<div class="empty"><div class="ico">📋</div>暂无离线任务</div>'; return; }
-    const doneN = data.filter(t => t.status === 2).length;
-    const clearBtn = $('#btnClearDone');
-    if (clearBtn) clearBtn.disabled = doneN === 0;
     box.innerHTML = data.map(t => {
       const pct = t.progress || 0;
       const sCls = t.status === 2 ? 'ok' : (t.status === 3 ? 'err' : (t.status === 1 ? 'warn' : ''));
@@ -428,22 +419,6 @@
     const { ok, data } = await api.post('/api/tasks/delete', { identity, delete_files: r.checked });
     if (!ok) { toast(data.error || '删除失败', 'error'); return; }
     toast(r.checked ? '已删除任务及文件' : '已删除任务', 'success');
-    loadTasks();
-  }
-  async function clearCompleted() {
-    const r = await confirmDialog({
-      title: '清除已完成任务',
-      message: `确定要清除所有 <b>已完成</b> 的离线任务吗？等待中 / 下载中 / 失败的任务不会被清除。`,
-      confirmText: '清除',
-    });
-    if (!r.ok) return;
-    const btn = $('#btnClearDone');
-    const old = btn.textContent;
-    btn.disabled = true; btn.textContent = '清除中…';
-    const { ok, data } = await api.post('/api/tasks/clear', { delete_files: r.checked });
-    btn.disabled = false; btn.textContent = old;
-    if (!ok) { toast(data.error || '清除失败', 'error'); return; }
-    toast(`已清除 ${data.deleted || 0} 条已完成任务`, 'success');
     loadTasks();
   }
   // confirmDialog 通用确认弹窗，返回 { ok, checked }。

@@ -160,38 +160,4 @@ func (c *Client) DeleteTask(ctx context.Context, identity string, deleteFiles bo
 	return err
 }
 
-// ClearCompletedTasks 删除所有已完成任务（status==2），返回删除条数。
-// deleteFiles 为 true 时同时删除已下载的文件。
-func (c *Client) ClearCompletedTasks(ctx context.Context, deleteFiles bool) (int, error) {
-	s := c.snap()
-	resp, err := s.offline.List(ctx, &offline.OfflineTaskListRequest{})
-	if err != nil {
-		return 0, err
-	}
-	var ids []string
-	for _, t := range resp.Tasks {
-		if t.Status == TaskStatusCompleted {
-			ids = append(ids, t.Identity)
-		}
-	}
-	if len(ids) == 0 {
-		return 0, nil
-	}
-	if _, err := s.offline.Delete(ctx, &offline.OfflineTaskDeleteRequest{
-		Identity:    ids,
-		DeleteFiles: deleteFiles,
-	}); err != nil {
-		return 0, err
-	}
-	return len(ids), nil
-}
-
-// 离线任务状态枚举（与 2dland /v6/offline_task/list 返回一致）。
-const (
-	TaskStatusWaiting   = 0 // 等待中
-	TaskStatusRunning   = 1 // 下载中
-	TaskStatusCompleted = 2 // 已完成
-	TaskStatusFailed    = 3 // 失败
-)
-
 var errEmptyIdentity = fmt.Errorf("identity 不能为空")
