@@ -167,7 +167,43 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 			res.Skipped = append(res.Skipped, v.Name+" (重命名失败)")
 			continue
 		}
+		log.Printf("OrganizeTask: rename %q -> %q", v.Name, newName)
 		res.Renamed = append(res.Renamed, RenameRecord{Old: v.Name, New: newName})
+	}
+
+	// BT 下载常带同名子目录（如「标题.6v电影 地址发布页...」），视频在子目录里。
+	// 把视频移动到 savePath 根，再删除空的 BT 子目录，使文件直接落在标题/季目录下。
+	savePathTrim := strings.TrimRight(savePath, "/")
+	var moveIDs []string
+	for _, v := range videos {
+		if path.Dir(v.Path) != savePathTrim {
+			moveIDs = append(moveIDs, v.Identity)
+		}
+	}
+	if len(moveIDs) > 0 {
+		if err := c.Move(ctx, moveIDs, savePath); err != nil {
+			log.Printf("OrganizeTask: move %d videos to %q failed: %v", len(moveIDs), savePath, err)
+		} else {
+			log.Printf("OrganizeTask: moved %d videos to %q", len(moveIDs), savePath)
+		}
+	}
+
+	// 删除 savePath 下的 BT 子目录（视频已移出、广告已删，子目录为 BT 残留）
+	topFiles, err := c.ListFiles(ctx, savePath)
+	if err == nil {
+		var dirIDs []string
+		for _, f := range topFiles {
+			if f.Dir {
+				dirIDs = append(dirIDs, f.Identity)
+			}
+		}
+		if len(dirIDs) > 0 {
+			if err := c.DeleteFiles(ctx, dirIDs); err != nil {
+				log.Printf("OrganizeTask: delete %d BT subdirs failed: %v", len(dirIDs), err)
+			} else {
+				log.Printf("OrganizeTask: deleted %d BT subdirs", len(dirIDs))
+			}
+		}
 	}
 
 	log.Printf("OrganizeTask: done deleted=%d renamed=%d skipped=%d", len(res.Deleted), len(res.Renamed), len(res.Skipped))

@@ -12,9 +12,9 @@
   // 6v 分类中文映射（与后端 categoryNames 保持一致）
   const catNames = { dy: '电影', gydy: '国语电影', gq: '经典高清', zydy: '动漫', jddy: '动画电影', '3D': '3D电影', dlz: '国剧', rj: '日韩剧', mj: '欧美剧', zy: '综艺', shoujidianyingmp4: '手机电影' };
   const catName = c => catNames[c] || c || '未分类';
-  // 2dland 任务状态：0=等待 1=解析 2=下载中 10=已完成（实测，非 0-3 数组映射）
+  // 2dland 任务状态：0=等待 1=解析 2=下载中 1000=已完成（实测）
   const taskStatus = s => {
-    if (s === 10) return '已完成';
+    if (s === 1000) return '已完成';
     if (s === 0) return '等待中';
     if (s === 1) return '解析中';
     if (s === 2) return '下载中';
@@ -567,7 +567,7 @@
       </div>`;
     box.innerHTML = head + items.map(t => {
       const pct = t.progress || 0;
-      const sCls = t.status === 10 ? 'ok' : (t.status === 3 ? 'err' : (t.status === 1 || t.status === 2 ? 'warn' : ''));
+      const sCls = t.status === 1000 ? 'ok' : (t.status === 3 ? 'err' : (t.status === 1 || t.status === 2 ? 'warn' : ''));
       const name = t.name || t.url || '未命名';
       const checked = state.taskSel.has(t.identity) ? 'checked' : '';
       return `<div class="task">
@@ -579,7 +579,7 @@
         <div class="progress"><span style="width:${pct}%"></span></div>
         <div class="pct">${pct}%</div>
         <span class="pill ${sCls}">${esc(taskStatus(t.status))}</span>
-        ${t.status === 10 && t.save_path ? `<button class="icon-btn t-org" data-save="${esc(t.save_path)}" data-name="${esc(name)}" title="整理文件：删广告 + 规范命名">✨</button>` : ''}
+        ${t.status === 1000 && t.save_path ? `<button class="icon-btn t-org" data-save="${esc(t.save_path)}" data-name="${esc(name)}" title="整理文件：删广告 + 规范命名">✨</button>` : ''}
         <button class="icon-btn t-del" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="删除此任务">🗑</button>
       </div>`;
     }).join('') + `<div class="pager">

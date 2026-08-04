@@ -10,8 +10,8 @@ import (
 )
 
 // taskStatusCompleted 是 2dland 离线任务的「已完成」状态值。
-// 2dland 用 status=10 表示下载完成（实测，前端原 taskStatus 数组 0-3 映射有误）。
-const taskStatusCompleted int32 = 10
+// 2dland 用 status=1000 表示下载完成（实测：progress=100 且 bytes 全部下完时 status=1000）。
+const taskStatusCompleted int32 = 1000
 
 // watchInterval 是自动整理轮询任务状态的间隔。
 const watchInterval = 20 * time.Second
