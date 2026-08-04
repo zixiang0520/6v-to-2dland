@@ -8,6 +8,7 @@ import (
 	"strconv"
 
 	"6v-to-2dland/internal/tmdb"
+	"github.com/halalcloud/golang-sdk-lite/halalcloud/model"
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/offline"
 )
 
@@ -137,14 +138,36 @@ func normalizeFolderName(ctx context.Context, t *tmdb.Client, title, category st
 	return sanitize(title)
 }
 
-// ListTasks 列出当前离线下载任务。
+// ListTasks 列出全部离线下载任务。
+// 2dland 用游标分页（ListInfo.Token），这里循环拉取每页 50 条直到 token 为空。
 func (c *Client) ListTasks(ctx context.Context) ([]*offline.UserTask, error) {
 	s := c.snap()
-	resp, err := s.offline.List(ctx, &offline.OfflineTaskListRequest{})
-	if err != nil {
-		return nil, err
+	const pageSize = 50
+	var all []*offline.UserTask
+	var token string
+	for page := 0; ; page++ {
+		resp, err := s.offline.List(ctx, &offline.OfflineTaskListRequest{
+			ListInfo: &model.ScanListRequest{Limit: pageSize, Token: token},
+		})
+		if err != nil {
+			if page == 0 {
+				return nil, err
+			}
+			log.Printf("ListTasks: page %d error: %v (returning %d tasks so far)", page, err, len(all))
+			break
+		}
+		all = append(all, resp.Tasks...)
+		if resp.ListInfo == nil || resp.ListInfo.Token == "" || len(resp.Tasks) == 0 {
+			break
+		}
+		token = resp.ListInfo.Token
+		if page > 100 { // 安全上限，避免异常情况下无限循环（5000+ 任务）
+			log.Printf("ListTasks: hit page safety cap (%d pages, %d tasks)", page, len(all))
+			break
+		}
 	}
-	return resp.Tasks, nil
+	log.Printf("ListTasks: total %d tasks", len(all))
+	return all, nil
 }
 
 // DeleteTask 删除一个或多个离线任务（同步到 2dland）。deleteFiles 为 true 时同时删除已下载的文件。

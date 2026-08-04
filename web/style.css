@@ -254,6 +254,9 @@ textarea.input { resize: vertical; min-height: 70px; }
 .task .pct { font-size: 12px; color: var(--text-muted); width: 38px; text-align: right; }
 .t-check { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; flex-shrink: 0; }
 .task-bar { background: var(--surface-2); padding: 10px 12px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
+.pager { display: flex; align-items: center; justify-content: center; gap: 14px; padding: 16px 0 4px; }
+.pager .page-info { font-size: 13px; color: var(--text-muted); }
+.pager button:disabled { opacity: .45; cursor: not-allowed; }
 
 /* ============ 设置 ============ */
 .kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }

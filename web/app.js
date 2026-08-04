@@ -49,6 +49,8 @@
     selected: new Map(),   // magnet -> {name, magnet, category, title}
     lastResults: [],
     taskSel: new Set(),    // 选中的任务 identity（批量删除用）
+    taskAll: [],           // 全部任务（后端已分页拉全）
+    taskPage: 1,           // 当前任务页码（前端 50/页）
     theme: 'auto',
     pollTimer: null,
   };
@@ -378,10 +380,11 @@
   }
 
   // ============ 视图：任务 ============
+  const TASK_PAGE_SIZE = 50;
   function viewTasks() {
     return `
     <div class="page-head">
-      <div><h2>离线任务</h2><div class="desc">查看 2dland 离线下载队列；删除任务会同步到 2dland</div></div>
+      <div><h2>离线任务</h2><div class="desc">查看 2dland 全部离线下载任务；删除任务会同步到 2dland</div></div>
       <div class="row gap-sm">
         <button class="btn danger" id="btnBatchDel" disabled>🗑 批量删除 <span id="selCount">0</span></button>
         <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
@@ -401,17 +404,32 @@
     updateSelUI();
     const { ok, data } = await api.get('/api/tasks');
     if (!ok) { box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
-    if (!data || !data.length) { box.innerHTML = '<div class="empty"><div class="ico">📋</div>暂无离线任务</div>'; return; }
+    state.taskAll = data || [];
+    state.taskPage = 1;
+    renderTaskPage();
+  }
+  function renderTaskPage() {
+    const box = $('#tasksList');
+    if (!box) return;
+    const all = state.taskAll;
+    const total = all.length;
+    if (total === 0) { box.innerHTML = '<div class="empty"><div class="ico">📋</div>暂无离线任务</div>'; updateSelUI(); return; }
+    const totalPages = Math.max(1, Math.ceil(total / TASK_PAGE_SIZE));
+    if (state.taskPage > totalPages) state.taskPage = totalPages;
+    if (state.taskPage < 1) state.taskPage = 1;
+    const start = (state.taskPage - 1) * TASK_PAGE_SIZE;
+    const items = all.slice(start, start + TASK_PAGE_SIZE);
     const head = `<div class="task task-bar">
-        <input type="checkbox" id="checkAll" class="t-check" title="全选/取消全选">
-        <div class="t-name muted text-sm">全选（共 ${data.length} 项）</div>
+        <input type="checkbox" id="checkAll" class="t-check" title="全选当前页">
+        <div class="t-name muted text-sm">第 ${state.taskPage}/${totalPages} 页 · 本页 ${items.length} 项 · 共 ${total} 项</div>
       </div>`;
-    box.innerHTML = head + data.map(t => {
+    box.innerHTML = head + items.map(t => {
       const pct = t.progress || 0;
       const sCls = t.status === 2 ? 'ok' : (t.status === 3 ? 'err' : (t.status === 1 ? 'warn' : ''));
       const name = t.name || t.url || '未命名';
+      const checked = state.taskSel.has(t.identity) ? 'checked' : '';
       return `<div class="task">
-        <input type="checkbox" class="t-check t-item" data-id="${esc(t.identity)}">
+        <input type="checkbox" class="t-check t-item" data-id="${esc(t.identity)}" ${checked}>
         <div class="t-name">
           <div>${esc(name)}</div>
           ${t.save_path ? `<div class="muted text-xs" title="${esc(t.save_path)}">📁 ${esc(t.save_path)}</div>` : ''}
@@ -421,7 +439,11 @@
         <span class="pill ${sCls}">${esc(taskStatus(t.status))}</span>
         <button class="icon-btn t-del" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="删除此任务">🗑</button>
       </div>`;
-    }).join('');
+    }).join('') + `<div class="pager">
+        <button class="btn sm" id="prevPage" ${state.taskPage <= 1 ? 'disabled' : ''}>‹ 上一页</button>
+        <span class="page-info">第 <b>${state.taskPage}</b> / ${totalPages} 页</span>
+        <button class="btn sm" id="nextPage" ${state.taskPage >= totalPages ? 'disabled' : ''}>下一页 ›</button>
+      </div>`;
     // 单项复选框
     $$('.t-item').forEach(cb => cb.onchange = () => {
       if (cb.checked) state.taskSel.add(cb.dataset.id);
@@ -429,15 +451,20 @@
       updateSelUI();
       syncCheckAll();
     });
-    // 全选
+    // 全选（仅当前页）
     const ca = $('#checkAll');
     if (ca) ca.onchange = () => {
       if (ca.checked) $$('.t-item').forEach(cb => { cb.checked = true; state.taskSel.add(cb.dataset.id); });
-      else { $$('.t-item').forEach(cb => { cb.checked = false; }); state.taskSel.clear(); }
+      else $$('.t-item').forEach(cb => { cb.checked = false; state.taskSel.delete(cb.dataset.id); });
       updateSelUI();
     };
     // 单条删除
     $$('.t-del').forEach(b => b.onclick = () => deleteTask(b.dataset.id, b.dataset.name));
+    // 翻页
+    const prev = $('#prevPage'), next = $('#nextPage');
+    if (prev) prev.onclick = () => { if (state.taskPage > 1) { state.taskPage--; renderTaskPage(); } };
+    if (next) next.onclick = () => { if (state.taskPage < totalPages) { state.taskPage++; renderTaskPage(); } };
+    syncCheckAll();
   }
   function updateSelUI() {
     const n = state.taskSel.size;
@@ -467,7 +494,7 @@
     if (!ids.length) return;
     const r = await confirmDialog({
       title: '批量删除任务',
-      message: `确定要删除选中的 <b>${ids.length}</b> 个任务吗？`,
+      message: `确定要删除选中的 <b>${ids.length}</b> 个任务吗？（跨页选中也会一并删除）`,
     });
     if (!r.ok) return;
     const btn = $('#btnBatchDel');
