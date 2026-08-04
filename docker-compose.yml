@@ -1,0 +1,18 @@
+# 6v520 → 2dland 离线下载助手 —— Docker Compose 示例
+# 使用：把 config.json 放到 ./data 目录，然后 docker compose up -d
+services:
+  6v-to-2dland:
+    # 本地构建；若已推送到镜像仓库，可改为 image: <registry>/6v-to-2dland:latest
+    build: .
+    image: 6v-to-2dland:latest
+    container_name: 6v-to-2dland
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      # 配置 + token 持久化目录（config.json 放在此目录内）
+      - ./data:/app/data
+    # 如需容器内访问宿主代理（TMDB 规范化），取消注释并按需修改：
+    # environment:
+    #   - HTTP_PROXY=http://host.docker.internal:7890
+    #   - HTTPS_PROXY=http://host.docker.internal:7890

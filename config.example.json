@@ -1,0 +1,12 @@
+{
+  "listen": ":8080",
+  "base_dir": "6v下载",
+  "max_pages": 8,
+  "client_id": "在此填入 2dland 开放平台的 client_id",
+  "client_secret": "在此填入 2dland 开放平台的 client_secret",
+  "token_file": "token.json",
+  "site_base": "http://www.6v520.com",
+  "tmdb_api_key": "在此填入 TMDB API Key（留空则不规范化标题）",
+  "tmdb_proxy": "http://127.0.0.1:7890",
+  "tmdb_language": "zh-CN"
+}

@@ -1,0 +1,26 @@
+# 构建产物 / 本地二进制
+*.exe
+*.exe~
+6v-to-2dland
+6v-to-2dland.exe
+/dist/
+
+# 运行时生成的本地数据（含密钥，禁止提交）
+config.json
+token.json
+*.token.json
+
+# 测试 / 探针临时文件
+*.out
+*.tmp
+*.log
+.probe_*.html
+
+# 编辑器 / IDE
+.vscode/
+.idea/
+.trae/
+
+# 系统垃圾
+.DS_Store
+Thumbs.db

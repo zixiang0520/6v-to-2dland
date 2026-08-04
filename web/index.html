@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>6v520 → 2dland 离线下载助手</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>6v520 → 2dland 离线下载助手</h1>
+  <div class="auth"><span id="authStatus" class="hint">检查中…</span> <button id="btnLogin" disabled>登录 2dland</button></div>
+</header>
+<main>
+  <section class="card">
+    <h2>搜索资源</h2>
+    <div class="row">
+      <input id="kw" placeholder="输入电影/剧集名，如：灵魂伴侣" autocomplete="off">
+      <button id="btnSearch">搜索</button>
+      <span id="searchHint" class="hint"></span>
+    </div>
+    <div id="results"></div>
+  </section>
+
+  <section class="card">
+    <h2>已选磁力链 <span id="selCount" class="badge">0</span></h2>
+    <div id="selected" class="hint">暂未选择</div>
+    <div class="row">
+      <span class="hint">文件夹自动按「分类 / 标题(年份) / 第N季」建立（电影无季级）</span>
+      <button id="btnPush" disabled>推送到 2dland</button>
+    </div>
+    <div id="pushResult"></div>
+  </section>
+
+  <section class="card">
+    <h2>离线任务 <button id="btnTasks" class="ghost">刷新</button></h2>
+    <div id="tasks" class="hint">点击「刷新」查看</div>
+  </section>
+</main>
+
+<div id="modal" class="modal hidden">
+  <div class="modal-box">
+    <h3>登录 2dland</h3>
+    <p>请在浏览器中打开下方地址，输入用户码完成授权：</p>
+    <p>地址：<a id="mUri" target="_blank"></a></p>
+    <p>用户码：<b id="mCode" class="code"></b></p>
+    <p id="mState" class="hint">等待授权…</p>
+    <button id="mClose">关闭</button>
+  </div>
+</div>
+<script src="/app.js"></script>
+</body>
+</html>
