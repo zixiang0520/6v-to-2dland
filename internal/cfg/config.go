@@ -29,7 +29,7 @@ func Defaults() *Config {
 		BaseDir:   "6v下载",
 		MaxPages:  8,
 		TokenFile: "token.json",
-		SiteBase:  "http://www.6v520.com",
+		SiteBase:  "https://www.6v520.com",
 		TmdbLang:  "zh-CN",
 	}
 }
@@ -60,7 +60,7 @@ func Load(path string) (*Config, error) {
 		c.TokenFile = "token.json"
 	}
 	if c.SiteBase == "" {
-		c.SiteBase = "http://www.6v520.com"
+		c.SiteBase = "https://www.6v520.com"
 	}
 	if c.TmdbLang == "" {
 		c.TmdbLang = "zh-CN"

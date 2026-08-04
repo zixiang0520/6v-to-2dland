@@ -3,6 +3,7 @@ package site6v
 import (
 	"io"
 	"net/http"
+	"net/http/cookiejar"
 	"time"
 
 	"golang.org/x/text/encoding/simplifiedchinese"
@@ -18,10 +19,12 @@ type Client struct {
 }
 
 // NewClient 创建客户端，base 为站点根 URL。
+// 内置 cookie jar，用于 EmpireCMS 站内搜索的 lastsearchtime 频控 cookie。
 func NewClient(base string) *Client {
+	jar, _ := cookiejar.New(nil)
 	return &Client{
 		Base: base,
-		HTTP: &http.Client{Timeout: 20 * time.Second},
+		HTTP: &http.Client{Timeout: 20 * time.Second, Jar: jar},
 	}
 }
 
