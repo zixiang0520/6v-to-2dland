@@ -126,6 +126,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/files/delete", s.requireAuth(s.filesDelete))
 	mux.HandleFunc("GET /api/files/trash", s.requireAuth(s.filesTrashList))
 	mux.HandleFunc("POST /api/files/recover", s.requireAuth(s.filesRecover))
+	mux.HandleFunc("GET /api/files/recent", s.requireAuth(s.filesRecent))
 	mux.HandleFunc("GET /api/settings", s.requireAuth(s.settingsGet))
 	mux.HandleFunc("POST /api/settings", s.requireAuth(s.settingsPost))
 	mux.HandleFunc("POST /api/settings/test", s.requireAuth(s.settingsTest))

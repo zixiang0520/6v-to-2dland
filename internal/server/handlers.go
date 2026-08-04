@@ -513,6 +513,16 @@ func (s *Server) filesRecover(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// filesRecent 列出最近更新的文件（全局，用于查找丢失文件）。
+func (s *Server) filesRecent(w http.ResponseWriter, r *http.Request) {
+	files, err := s.drive.ListRecentFiles(r.Context())
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, files)
+}
+
 // ---------- 发现页（各分类列表） ----------
 //
 // 查询参数：

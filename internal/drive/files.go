@@ -2,6 +2,7 @@ package drive
 
 import (
 	"context"
+	"fmt"
 	"log"
 
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/model"
@@ -60,20 +61,50 @@ func (c *Client) Rename(ctx context.Context, identity, newName string) error {
 }
 
 // Move 把一组文件/目录（按 identity）移动到 destPath 目录下。
+// 注意：2dland Move 的 Dest 用 Path 会丢失文件（移到无效位置），必须用 Identity。
+// 这里先用 Get 解析 destPath → identity，再用 Dest.Identity 移动。
 func (c *Client) Move(ctx context.Context, identities []string, destPath string) error {
 	if len(identities) == 0 {
 		return errEmptyIdentity
 	}
 	s := c.snap()
+	dest, err := s.userfile.Get(ctx, &userfile.File{Path: destPath})
+	if err != nil || dest == nil || dest.Identity == "" {
+		return fmt.Errorf("移动目标目录 %q 不存在: %v", destPath, err)
+	}
 	srcs := make([]*userfile.File, 0, len(identities))
 	for _, id := range identities {
 		srcs = append(srcs, &userfile.File{Identity: id})
 	}
-	_, err := s.userfile.Move(ctx, &userfile.BatchOperationRequest{
+	_, err = s.userfile.Move(ctx, &userfile.BatchOperationRequest{
 		Source: srcs,
-		Dest:   &userfile.File{Path: destPath},
+		Dest:   &userfile.File{Identity: dest.Identity},
 	})
 	return err
+}
+
+// ListRecentFiles 列出最近更新的文件（全局，用于查找丢失文件等）。
+func (c *Client) ListRecentFiles(ctx context.Context) ([]*userfile.File, error) {
+	s := c.snap()
+	var all []*userfile.File
+	var token string
+	for page := 0; page < 20; page++ {
+		resp, err := s.userfile.ListRecentUpdatedFiles(ctx, &userfile.ListRecentUpdatedFilesRequest{
+			ListInfo: &model.ScanListRequest{Limit: 50, Token: token},
+		})
+		if err != nil {
+			if page == 0 {
+				return nil, err
+			}
+			break
+		}
+		all = append(all, resp.Files...)
+		if resp.ListInfo == nil || resp.ListInfo.Token == "" || len(resp.Files) == 0 {
+			break
+		}
+		token = resp.ListInfo.Token
+	}
+	return all, nil
 }
 
 // DeleteFiles 把一组文件/目录移到回收站（安全删除，可恢复）。
