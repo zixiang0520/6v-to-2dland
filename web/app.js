@@ -51,6 +51,9 @@
     taskSel: new Set(),    // 选中的任务 identity（批量删除用）
     taskAll: [],           // 全部任务（后端已分页拉全）
     taskPage: 1,           // 当前任务页码（前端 50/页）
+    fileCwd: '/',          // 文件管理当前目录路径
+    fileSel: new Set(),    // 选中的文件 identity
+    fileItems: [],          // 当前目录文件列表
     theme: 'auto',
     pollTimer: null,
   };
@@ -101,7 +104,7 @@
 
   function onHash() {
     const h = location.hash.slice(1);
-    state.view = ['search', 'tasks', 'settings'].includes(h) ? h : 'search';
+    state.view = ['search', 'tasks', 'files', 'settings'].includes(h) ? h : 'search';
     render();
   }
 
@@ -123,6 +126,7 @@
     const c = $('#content');
     if (!c) return;
     if (state.view === 'tasks') { c.innerHTML = viewTasks(); bindTasks(); loadTasks(); }
+    else if (state.view === 'files') { c.innerHTML = viewFiles(); bindFiles(); loadFiles(); }
     else if (state.view === 'settings') { c.innerHTML = viewSettingsLoading(); loadSettings(); }
     else { c.innerHTML = viewSearch(); bindSearch(); renderSelected(); }
   }
@@ -229,6 +233,7 @@
         <nav class="nav">
           <a class="nav-item ${state.view === 'search' ? 'active' : ''}" href="#search">🔍 搜索</a>
           <a class="nav-item ${state.view === 'tasks' ? 'active' : ''}" href="#tasks">📋 任务</a>
+          <a class="nav-item ${state.view === 'files' ? 'active' : ''}" href="#files">📂 文件</a>
           <a class="nav-item ${state.view === 'settings' ? 'active' : ''}" href="#settings">⚙ 设置</a>
         </nav>
         <div class="actions">
@@ -529,6 +534,210 @@
       $('#confirmCancel').onclick = () => close({ ok: false });
       $('#confirmX').onclick = () => close({ ok: false });
       $('#confirmMask').onclick = e => { if (e.target.id === 'confirmMask') close({ ok: false }); };
+    });
+  }
+
+  // ============ 视图：文件管理 ============
+  function viewFiles() {
+    return `
+    <div class="page-head">
+      <div><h2>文件管理</h2><div class="desc">直接管理 2dland 网盘文件，可拖拽文件到文件夹移动</div></div>
+      <div class="row gap-sm">
+        <button class="btn" id="btnNewFolder">📁 新建文件夹</button>
+        <button class="btn danger" id="btnFileDel" disabled>🗑 删除选中 <span id="fileSelCount"></span></button>
+        <button class="btn" id="btnRefreshFiles">⟳ 刷新</button>
+      </div>
+    </div>
+    <div class="card">
+      <div class="breadcrumb" id="breadcrumb"></div>
+      <div id="fileList" class="muted text-sm"><span class="spinner"></span> 加载中…</div>
+      <div class="help mt-12">💡 拖拽文件/文件夹到目标文件夹或面包屑路径上即可移动；点击文件夹名进入；删除是移到回收站，可在 2dland 恢复。</div>
+    </div>`;
+  }
+  function bindFiles() {
+    $('#btnRefreshFiles').onclick = loadFiles;
+    $('#btnNewFolder').onclick = newFolder;
+    $('#btnFileDel').onclick = deleteFiles;
+  }
+  async function loadFiles() {
+    const box = $('#fileList');
+    if (!box) return;
+    box.innerHTML = '<span class="spinner"></span> 加载中…';
+    state.fileSel.clear();
+    updateFileSelUI();
+    renderBreadcrumb();
+    const { ok, data } = await api.get('/api/files?path=' + encodeURIComponent(state.fileCwd));
+    if (!ok) { box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
+    state.fileItems = data || [];
+    renderFileList();
+  }
+  function renderBreadcrumb() {
+    const bc = $('#breadcrumb');
+    if (!bc) return;
+    const cwd = state.fileCwd || '/';
+    const segs = cwd.split('/').filter(Boolean);
+    let html = `<span class="crumb drop-target" data-path="/" title="回到根目录">🏠 根目录</span>`;
+    let cur = '';
+    segs.forEach(seg => {
+      cur += '/' + seg;
+      html += `<span class="crumb-sep">/</span><span class="crumb drop-target" data-path="${esc(cur)}">${esc(seg)}</span>`;
+    });
+    bc.innerHTML = html;
+    $$('#breadcrumb .drop-target').forEach(el => {
+      el.onclick = () => { if (el.dataset.path !== state.fileCwd) { state.fileCwd = el.dataset.path; loadFiles(); } };
+      el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag-over'); e.dataTransfer.dropEffect = 'move'; });
+      el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+      el.addEventListener('drop', e => {
+        e.preventDefault();
+        el.classList.remove('drag-over');
+        const ids = (e.dataTransfer.getData('text/plain') || '').split(',').filter(Boolean);
+        if (ids.length && el.dataset.path !== state.fileCwd) moveFiles(ids, el.dataset.path, el.textContent.trim());
+      });
+    });
+  }
+  function renderFileList() {
+    const box = $('#fileList');
+    if (!box) return;
+    const items = state.fileItems.slice().sort((a, b) => (b.dir - a.dir) || a.name.localeCompare(b.name, 'zh'));
+    if (!items.length) { box.innerHTML = '<div class="empty"><div class="ico">📂</div>空文件夹</div>'; return; }
+    box.innerHTML = items.map(f => {
+      const icon = f.dir ? '📁' : iconForFile(f.name);
+      const meta = f.dir ? `${f.dirs} 文件夹 · ${f.files} 文件` : formatSize(f.size);
+      const date = f.update_ts ? new Date(f.update_ts * 1000).toLocaleDateString('zh-CN') : '';
+      const checked = state.fileSel.has(f.identity) ? 'checked' : '';
+      return `<div class="fitem ${f.dir ? 'is-dir drop-target' : ''}" draggable="true" data-id="${esc(f.identity)}" data-name="${esc(f.name)}" data-path="${esc(f.path)}" data-dir="${f.dir}">
+        <input type="checkbox" class="f-check" data-id="${esc(f.identity)}" ${checked}>
+        <span class="f-icon">${icon}</span>
+        <span class="f-name" title="${esc(f.name)}">${esc(f.name)}</span>
+        <span class="f-meta muted text-xs">${esc(meta)}</span>
+        <span class="f-date muted text-xs">${esc(date)}</span>
+        <button class="icon-btn f-rename" data-id="${esc(f.identity)}" data-name="${esc(f.name)}" title="重命名">✏️</button>
+      </div>`;
+    }).join('');
+    bindFileEvents();
+  }
+  let _dragIds = [];
+  function bindFileEvents() {
+    $$('.f-check').forEach(cb => cb.onchange = () => {
+      if (cb.checked) state.fileSel.add(cb.dataset.id);
+      else state.fileSel.delete(cb.dataset.id);
+      updateFileSelUI();
+    });
+    $$('.fitem').forEach(el => {
+      if (el.dataset.dir === 'true') {
+        el.querySelector('.f-name').onclick = () => { state.fileCwd = el.dataset.path; loadFiles(); };
+      }
+      el.addEventListener('dragstart', e => {
+        const id = el.dataset.id;
+        _dragIds = state.fileSel.has(id) ? Array.from(state.fileSel) : [id];
+        e.dataTransfer.effectAllowed = 'move';
+        e.dataTransfer.setData('text/plain', _dragIds.join(','));
+        el.classList.add('dragging');
+      });
+      el.addEventListener('dragend', () => { el.classList.remove('dragging'); _dragIds = []; });
+    });
+    $$('.fitem.is-dir').forEach(el => {
+      el.addEventListener('dragover', e => { e.preventDefault(); el.classList.add('drag-over'); e.dataTransfer.dropEffect = 'move'; });
+      el.addEventListener('dragleave', () => el.classList.remove('drag-over'));
+      el.addEventListener('drop', e => {
+        e.preventDefault();
+        el.classList.remove('drag-over');
+        const ids = (e.dataTransfer.getData('text/plain') || '').split(',').filter(Boolean);
+        if (ids.length) moveFiles(ids, el.dataset.path, el.dataset.name);
+      });
+    });
+    $$('.f-rename').forEach(b => b.onclick = e => { e.stopPropagation(); renameFile(b.dataset.id, b.dataset.name); });
+  }
+  function updateFileSelUI() {
+    const n = state.fileSel.size;
+    const btn = $('#btnFileDel'), cnt = $('#fileSelCount');
+    if (btn) btn.disabled = n === 0;
+    if (cnt) cnt.textContent = n > 0 ? `(${n})` : '';
+  }
+  async function newFolder() {
+    const name = await promptDialog({ title: '新建文件夹', placeholder: '输入文件夹名' });
+    if (!name) return;
+    const { ok, data } = await api.post('/api/files/mkdir', { parent: state.fileCwd, name });
+    if (!ok) { toast(data.error || '创建失败', 'error'); return; }
+    toast('文件夹已创建', 'success');
+    loadFiles();
+  }
+  async function renameFile(identity, oldName) {
+    const name = await promptDialog({ title: '重命名', value: oldName, placeholder: '输入新名称' });
+    if (!name || name === oldName) return;
+    const { ok, data } = await api.post('/api/files/rename', { identity, name });
+    if (!ok) { toast(data.error || '重命名失败', 'error'); return; }
+    toast('已重命名', 'success');
+    loadFiles();
+  }
+  async function deleteFiles() {
+    const ids = Array.from(state.fileSel);
+    if (!ids.length) return;
+    const r = await confirmDialog({
+      title: '删除文件',
+      message: `确定要删除选中的 <b>${ids.length}</b> 项吗？（移到回收站，可在 2dland 恢复）`,
+      checkboxLabel: '',
+    });
+    if (!r.ok) return;
+    const { ok, data } = await api.post('/api/files/delete', { identities: ids });
+    if (!ok) { toast(data.error || '删除失败', 'error'); return; }
+    toast(`已删除 ${ids.length} 项`, 'success');
+    loadFiles();
+  }
+  async function moveFiles(ids, dest, destName) {
+    const r = await confirmDialog({
+      title: '移动文件',
+      message: `确定要把 <b>${ids.length}</b> 项移动到「<b>${esc(destName)}</b>」吗？`,
+      confirmText: '移动', danger: false, checkboxLabel: '',
+    });
+    if (!r.ok) return;
+    const { ok, data } = await api.post('/api/files/move', { identities: ids, dest });
+    if (!ok) { toast(data.error || '移动失败', 'error'); return; }
+    toast(`已移动 ${ids.length} 项`, 'success');
+    loadFiles();
+  }
+  function formatSize(b) {
+    if (!b) return '-';
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0, n = b;
+    while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+    return (n < 10 && i > 0 ? n.toFixed(1) : Math.round(n)) + ' ' + u[i];
+  }
+  function iconForFile(name) {
+    const ext = (name.split('.').pop() || '').toLowerCase();
+    if (['mp4', 'mkv', 'avi', 'rmvb', 'mov', 'wmv', 'flv', 'ts', 'm4v'].includes(ext)) return '🎬';
+    if (['mp3', 'flac', 'ape', 'wav', 'm4a', 'aac'].includes(ext)) return '🎵';
+    if (['jpg', 'jpeg', 'png', 'gif', 'bmp', 'webp'].includes(ext)) return '🖼️';
+    if (['srt', 'ass', 'ssa', 'sub', 'vtt'].includes(ext)) return '📝';
+    if (['zip', 'rar', '7z', 'tar', 'gz'].includes(ext)) return '📦';
+    return '📄';
+  }
+  // promptDialog 输入弹窗，返回输入文本或 null。
+  function promptDialog({ title, value = '', placeholder = '' }) {
+    return new Promise(resolve => {
+      const root = $('#modal-root');
+      root.innerHTML = `
+      <div class="modal-mask" id="promptMask">
+        <div class="modal">
+          <div class="modal-head"><h3>${esc(title)}</h3><button class="icon-btn" id="promptX">✕</button></div>
+          <div class="modal-body">
+            <input id="promptInput" class="input" value="${esc(value)}" placeholder="${esc(placeholder)}">
+          </div>
+          <div class="modal-foot">
+            <button class="btn" id="promptCancel">取消</button>
+            <button class="btn primary" id="promptOk">确定</button>
+          </div>
+        </div>
+      </div>`;
+      const inp = $('#promptInput');
+      inp.focus(); inp.select();
+      const close = res => { root.innerHTML = ''; resolve(res); };
+      const ok = () => { const v = inp.value.trim(); close(v || null); };
+      $('#promptOk').onclick = ok;
+      $('#promptCancel').onclick = () => close(null);
+      $('#promptX').onclick = () => close(null);
+      inp.addEventListener('keydown', e => { if (e.key === 'Enter') ok(); if (e.key === 'Escape') close(null); });
+      $('#promptMask').onclick = e => { if (e.target.id === 'promptMask') close(null); };
     });
   }
 

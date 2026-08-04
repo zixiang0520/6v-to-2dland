@@ -329,3 +329,129 @@ func (s *Server) settingsTest(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, http.StatusOK, out)
 }
+
+// ---------- 文件管理 ----------
+
+// fileItem 是返回前端的精简文件信息（去掉 SDK File 的冗余字段）。
+type fileItem struct {
+	Identity string `json:"identity"`
+	Name     string `json:"name"`
+	Path     string `json:"path"`
+	Dir      bool   `json:"dir"`
+	Size     int64  `json:"size"`
+	UpdateTs int64  `json:"update_ts"`
+	Files    int64  `json:"files"` // 目录内的文件数
+	Dirs     int64  `json:"dirs"`  // 目录内的子目录数
+}
+
+func (s *Server) filesList(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Query().Get("path")
+	if path == "" {
+		path = "/"
+	}
+	files, err := s.drive.ListFiles(r.Context(), path)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	items := make([]fileItem, 0, len(files))
+	for _, f := range files {
+		items = append(items, fileItem{
+			Identity: f.Identity,
+			Name:     f.Name,
+			Path:     f.Path,
+			Dir:      f.Dir,
+			Size:     f.Size,
+			UpdateTs: f.UpdateTs,
+			Files:    f.Files,
+			Dirs:     f.Direcotries,
+		})
+	}
+	writeJSON(w, http.StatusOK, items)
+}
+
+func (s *Server) filesMkdir(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Parent string `json:"parent"`
+		Name   string `json:"name"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if body.Name == "" {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少文件夹名"))
+		return
+	}
+	if body.Parent == "" {
+		body.Parent = "/"
+	}
+	f, err := s.drive.Mkdir(r.Context(), body.Parent, body.Name)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "path": f.Path})
+}
+
+func (s *Server) filesRename(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Identity string `json:"identity"`
+		Name     string `json:"name"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if body.Identity == "" || body.Name == "" {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少 identity 或 name"))
+		return
+	}
+	if err := s.drive.Rename(r.Context(), body.Identity, body.Name); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) filesMove(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Identities []string `json:"identities"`
+		Dest       string   `json:"dest"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if len(body.Identities) == 0 {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少 identities"))
+		return
+	}
+	if body.Dest == "" {
+		body.Dest = "/"
+	}
+	if err := s.drive.Move(r.Context(), body.Identities, body.Dest); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+func (s *Server) filesDelete(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Identities []string `json:"identities"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if len(body.Identities) == 0 {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少 identities"))
+		return
+	}
+	if err := s.drive.DeleteFiles(r.Context(), body.Identities); err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}

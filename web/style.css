@@ -258,6 +258,27 @@ textarea.input { resize: vertical; min-height: 70px; }
 .pager .page-info { font-size: 13px; color: var(--text-muted); }
 .pager button:disabled { opacity: .45; cursor: not-allowed; }
 
+/* 文件管理 */
+.breadcrumb { display: flex; align-items: center; flex-wrap: wrap; gap: 2px; padding: 0 0 12px; border-bottom: 1px solid var(--border); margin-bottom: 4px; font-size: 13px; }
+.crumb { padding: 3px 8px; border-radius: var(--radius-sm); cursor: pointer; color: var(--text); }
+.crumb:hover { background: var(--surface-2); }
+.crumb-sep { color: var(--text-muted); padding: 0 2px; }
+.fitem { display: flex; align-items: center; gap: 12px; padding: 10px 8px; border-radius: var(--radius-sm); border-bottom: 1px solid var(--border); }
+.fitem:last-child { border-bottom: none; }
+.fitem:hover { background: var(--surface-2); }
+.f-check { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; flex-shrink: 0; }
+.f-icon { font-size: 18px; flex-shrink: 0; }
+.f-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.is-dir .f-name { cursor: pointer; font-weight: 500; }
+.is-dir .f-name:hover { color: var(--primary); }
+.f-meta { width: 180px; flex-shrink: 0; }
+.f-date { width: 90px; flex-shrink: 0; text-align: right; }
+.drop-target.drag-over { background: var(--surface-3); outline: 2px dashed var(--primary); outline-offset: -2px; border-radius: var(--radius-sm); }
+.fitem.dragging { opacity: .4; }
+@media (max-width: 720px) {
+  .f-meta, .f-date { display: none; }
+}
+
 /* ============ 设置 ============ */
 .kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
 .kv { padding: 12px 14px; background: var(--surface-2); border-radius: var(--radius-sm); border: 1px solid var(--border); }
