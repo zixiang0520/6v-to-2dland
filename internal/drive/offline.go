@@ -2,6 +2,7 @@ package drive
 
 import (
 	"context"
+	"log"
 	"regexp"
 	"strconv"
 
@@ -40,8 +41,10 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 	s := c.snap()
 	res := &PushResult{}
 	cache := map[string]string{} // key -> savePath，避免重复建目录
-	for _, it := range items {
+	log.Printf("Push: start items=%d logged_in=%v baseDir=%q", len(items), c.LoggedIn(), s.baseDir)
+	for i, it := range items {
 		ri := PushResultItem{Name: it.Name, Magnet: it.Magnet, Category: it.Category}
+		log.Printf("Push[%d]: category=%q title=%q name=%q isTV=%v", i, it.Category, it.Title, it.Name, isTVCategory(it.Category))
 
 		titleName := normalizeFolderName(ctx, s.tmdb, it.Title, it.Category)
 		ri.Folder = titleName
@@ -62,6 +65,7 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 				ri.Error = "创建文件夹失败: " + err.Error()
 				cache[key] = ""
 				res.Items = append(res.Items, ri)
+				log.Printf("Push[%d]: ensureFolder failed: %v", i, err)
 				continue
 			}
 			savePath = sp
@@ -70,9 +74,11 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 		if savePath == "" {
 			ri.Error = "创建文件夹失败"
 			res.Items = append(res.Items, ri)
+			log.Printf("Push[%d]: empty savePath", i)
 			continue
 		}
 		ri.SavePath = savePath
+		log.Printf("Push[%d]: savePath=%q cached=%v", i, savePath, cached)
 
 		task, err := s.offline.Add(ctx, &offline.UserTask{
 			Url:      it.Magnet,
@@ -81,9 +87,11 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 		})
 		if err != nil {
 			ri.Error = err.Error()
+			log.Printf("Push[%d]: offline.Add failed: %v", i, err)
 		} else {
 			ri.OK = true
 			ri.Identity = task.Identity
+			log.Printf("Push[%d]: offline.Add ok identity=%s", i, task.Identity)
 		}
 		res.Items = append(res.Items, ri)
 	}

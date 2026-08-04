@@ -2,6 +2,7 @@ package drive
 
 import (
 	"context"
+	"log"
 	"strings"
 
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/userfile"
@@ -48,31 +49,45 @@ func sanitize(name string) string {
 // ensureFolderByCategory 按 /<baseDir>/<分类>/<标题>[/<季>] 建目录。
 // 剧集类建立第三级 seasonName 目录；电影类忽略 seasonName，止于标题目录。
 func ensureFolderByCategory(ctx context.Context, s snapshot, category, titleName, seasonName string) (string, error) {
+	log.Printf("ensureFolderByCategory: category=%q titleName=%q seasonName=%q baseDir=%q", category, titleName, seasonName, s.baseDir)
 	base, err := ensureDir(ctx, s.userfile, "/", s.baseDir)
 	if err != nil {
+		log.Printf("ensureFolderByCategory: ensure baseDir failed: %v", err)
 		return "", err
 	}
 	cat, err := ensureDir(ctx, s.userfile, base, categoryName(category))
 	if err != nil {
+		log.Printf("ensureFolderByCategory: ensure category failed: %v", err)
 		return "", err
 	}
 	titlePath, err := ensureDir(ctx, s.userfile, cat, titleName)
 	if err != nil {
+		log.Printf("ensureFolderByCategory: ensure title failed: %v", err)
 		return "", err
 	}
 	if isTVCategory(category) && seasonName != "" {
-		return ensureDir(ctx, s.userfile, titlePath, seasonName)
+		sp, err := ensureDir(ctx, s.userfile, titlePath, seasonName)
+		if err != nil {
+			log.Printf("ensureFolderByCategory: ensure season failed: %v", err)
+			return "", err
+		}
+		log.Printf("ensureFolderByCategory: done savePath=%q", sp)
+		return sp, nil
 	}
+	log.Printf("ensureFolderByCategory: done savePath=%q", titlePath)
 	return titlePath, nil
 }
 
 // ensureDir 在 parentPath 下确保名为 name 的目录存在，返回其完整路径。
+// 防御：2dland API 返回的 File.Path 偶发只是目录名（非 / 开头的相对路径），
+// 直接用作下一步的 parent 或 offline_task/add 的 save_path 会导致目录错位
+// （表现为只建出最后一级「第N季」）。这里统一校验：返回值必须以 parentPath
+// 为前缀，否则用 joinPath(parentPath, name) 兜底拼出完整路径。
 func ensureDir(ctx context.Context, uf *userfile.UserFileService, parentPath, name string) (string, error) {
 	if existing, _ := findDir(ctx, uf, parentPath, name); existing != nil {
-		if existing.Path != "" {
-			return existing.Path, nil
-		}
-		return joinPath(parentPath, name), nil
+		p := normalizePath(existing.Path, parentPath, name)
+		log.Printf("ensureDir: hit existing parent=%q name=%q apiPath=%q usePath=%q", parentPath, name, existing.Path, p)
+		return p, nil
 	}
 	created, err := uf.Create(ctx, &userfile.File{
 		Name:   name,
@@ -82,10 +97,29 @@ func ensureDir(ctx context.Context, uf *userfile.UserFileService, parentPath, na
 	if err != nil {
 		return "", err
 	}
-	if created.Path != "" {
-		return created.Path, nil
+	p := normalizePath(created.Path, parentPath, name)
+	log.Printf("ensureDir: created parent=%q name=%q apiPath=%q usePath=%q", parentPath, name, created.Path, p)
+	return p, nil
+}
+
+// normalizePath 校验 apiPath 是否为相对于根的完整路径；不是则用 wantPath 兜底。
+// 判定标准：以 "/" 开头，且是 parentPath 的自身或子路径。
+func normalizePath(apiPath, parentPath, name string) string {
+	wantPath := joinPath(parentPath, name)
+	if apiPath == "" {
+		return wantPath
 	}
-	return joinPath(parentPath, name), nil
+	if !strings.HasPrefix(apiPath, "/") {
+		return wantPath
+	}
+	// parentPath 是 "/" 时，任何 /name 都合法
+	if parentPath == "/" {
+		return apiPath
+	}
+	if apiPath == parentPath || strings.HasPrefix(apiPath, strings.TrimRight(parentPath, "/")+"/") {
+		return apiPath
+	}
+	return wantPath
 }
 
 // findDir 在 parentPath 下查找名为 name 的子目录。
