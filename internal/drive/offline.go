@@ -95,6 +95,8 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 			ri.OK = true
 			ri.Identity = task.Identity
 			log.Printf("Push[%d]: offline.Add ok identity=%s", i, task.Identity)
+			// 异步轮询任务状态，下载完成后自动整理文件（删广告 + 规范命名）
+			c.startWatcher(task.Identity, savePath)
 		}
 		res.Items = append(res.Items, ri)
 	}
