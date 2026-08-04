@@ -197,21 +197,21 @@ func (s *Server) tasks(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, tasks)
 }
 
-// deleteTask 删除单个离线任务（同步到 2dland）。
+// deleteTask 删除一个或多个离线任务（同步到 2dland）。
 func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Identity    string `json:"identity"`
-		DeleteFiles bool   `json:"delete_files"`
+		Identities  []string `json:"identities"`
+		DeleteFiles bool     `json:"delete_files"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errResp(err))
 		return
 	}
-	if body.Identity == "" {
-		writeJSON(w, http.StatusBadRequest, errStr("缺少 identity"))
+	if len(body.Identities) == 0 {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少 identities"))
 		return
 	}
-	if err := s.drive.DeleteTask(r.Context(), body.Identity, body.DeleteFiles); err != nil {
+	if err := s.drive.DeleteTask(r.Context(), body.Identities, body.DeleteFiles); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errResp(err))
 		return
 	}

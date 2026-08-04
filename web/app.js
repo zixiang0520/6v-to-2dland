@@ -48,6 +48,7 @@
     view: 'search',
     selected: new Map(),   // magnet -> {name, magnet, category, title}
     lastResults: [],
+    taskSel: new Set(),    // 选中的任务 identity（批量删除用）
     theme: 'auto',
     pollTimer: null,
   };
@@ -381,23 +382,36 @@
     return `
     <div class="page-head">
       <div><h2>离线任务</h2><div class="desc">查看 2dland 离线下载队列；删除任务会同步到 2dland</div></div>
-      <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
+      <div class="row gap-sm">
+        <button class="btn danger" id="btnBatchDel" disabled>🗑 批量删除 <span id="selCount">0</span></button>
+        <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
+      </div>
     </div>
     <div class="card"><div id="tasksList" class="muted text-sm"><span class="spinner"></span> 加载中…</div></div>`;
   }
-  function bindTasks() { $('#btnRefreshTasks').onclick = loadTasks; }
+  function bindTasks() {
+    $('#btnRefreshTasks').onclick = loadTasks;
+    $('#btnBatchDel').onclick = batchDelete;
+  }
   async function loadTasks() {
     const box = $('#tasksList');
     if (!box) return;
     box.innerHTML = '<span class="spinner"></span> 加载中…';
+    state.taskSel.clear();
+    updateSelUI();
     const { ok, data } = await api.get('/api/tasks');
     if (!ok) { box.innerHTML = `<div class="err-text">${esc(data.error || '加载失败')}</div>`; return; }
     if (!data || !data.length) { box.innerHTML = '<div class="empty"><div class="ico">📋</div>暂无离线任务</div>'; return; }
-    box.innerHTML = data.map(t => {
+    const head = `<div class="task task-bar">
+        <input type="checkbox" id="checkAll" class="t-check" title="全选/取消全选">
+        <div class="t-name muted text-sm">全选（共 ${data.length} 项）</div>
+      </div>`;
+    box.innerHTML = head + data.map(t => {
       const pct = t.progress || 0;
       const sCls = t.status === 2 ? 'ok' : (t.status === 3 ? 'err' : (t.status === 1 ? 'warn' : ''));
       const name = t.name || t.url || '未命名';
       return `<div class="task">
+        <input type="checkbox" class="t-check t-item" data-id="${esc(t.identity)}">
         <div class="t-name">
           <div>${esc(name)}</div>
           ${t.save_path ? `<div class="muted text-xs" title="${esc(t.save_path)}">📁 ${esc(t.save_path)}</div>` : ''}
@@ -408,7 +422,34 @@
         <button class="icon-btn t-del" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="删除此任务">🗑</button>
       </div>`;
     }).join('');
+    // 单项复选框
+    $$('.t-item').forEach(cb => cb.onchange = () => {
+      if (cb.checked) state.taskSel.add(cb.dataset.id);
+      else state.taskSel.delete(cb.dataset.id);
+      updateSelUI();
+      syncCheckAll();
+    });
+    // 全选
+    const ca = $('#checkAll');
+    if (ca) ca.onchange = () => {
+      if (ca.checked) $$('.t-item').forEach(cb => { cb.checked = true; state.taskSel.add(cb.dataset.id); });
+      else { $$('.t-item').forEach(cb => { cb.checked = false; }); state.taskSel.clear(); }
+      updateSelUI();
+    };
+    // 单条删除
     $$('.t-del').forEach(b => b.onclick = () => deleteTask(b.dataset.id, b.dataset.name));
+  }
+  function updateSelUI() {
+    const n = state.taskSel.size;
+    const btn = $('#btnBatchDel'), cnt = $('#selCount');
+    if (btn) btn.disabled = n === 0;
+    if (cnt) cnt.textContent = n;
+  }
+  function syncCheckAll() {
+    const ca = $('#checkAll');
+    if (!ca) return;
+    const items = $$('.t-item');
+    ca.checked = items.length > 0 && items.every(cb => cb.checked);
   }
   async function deleteTask(identity, name) {
     const r = await confirmDialog({
@@ -416,9 +457,26 @@
       message: `确定要删除任务「<b>${esc(name)}</b>」吗？`,
     });
     if (!r.ok) return;
-    const { ok, data } = await api.post('/api/tasks/delete', { identity, delete_files: r.checked });
+    const { ok, data } = await api.post('/api/tasks/delete', { identities: [identity], delete_files: r.checked });
     if (!ok) { toast(data.error || '删除失败', 'error'); return; }
     toast(r.checked ? '已删除任务及文件' : '已删除任务', 'success');
+    loadTasks();
+  }
+  async function batchDelete() {
+    const ids = Array.from(state.taskSel);
+    if (!ids.length) return;
+    const r = await confirmDialog({
+      title: '批量删除任务',
+      message: `确定要删除选中的 <b>${ids.length}</b> 个任务吗？`,
+    });
+    if (!r.ok) return;
+    const btn = $('#btnBatchDel');
+    const old = btn.innerHTML;
+    btn.disabled = true; btn.textContent = '删除中…';
+    const { ok, data } = await api.post('/api/tasks/delete', { identities: ids, delete_files: r.checked });
+    btn.disabled = false; btn.innerHTML = old;
+    if (!ok) { toast(data.error || '删除失败', 'error'); return; }
+    toast(`已删除 ${ids.length} 个任务`, 'success');
     loadTasks();
   }
   // confirmDialog 通用确认弹窗，返回 { ok, checked }。

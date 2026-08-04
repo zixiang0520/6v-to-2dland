@@ -147,14 +147,14 @@ func (c *Client) ListTasks(ctx context.Context) ([]*offline.UserTask, error) {
 	return resp.Tasks, nil
 }
 
-// DeleteTask 删除单个离线任务（同步到 2dland）。deleteFiles 为 true 时同时删除已下载的文件。
-func (c *Client) DeleteTask(ctx context.Context, identity string, deleteFiles bool) error {
-	if identity == "" {
+// DeleteTask 删除一个或多个离线任务（同步到 2dland）。deleteFiles 为 true 时同时删除已下载的文件。
+func (c *Client) DeleteTask(ctx context.Context, identities []string, deleteFiles bool) error {
+	if len(identities) == 0 {
 		return errEmptyIdentity
 	}
 	s := c.snap()
 	_, err := s.offline.Delete(ctx, &offline.OfflineTaskDeleteRequest{
-		Identity:    []string{identity},
+		Identity:    identities,
 		DeleteFiles: deleteFiles,
 	})
 	return err

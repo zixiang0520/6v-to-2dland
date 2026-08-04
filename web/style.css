@@ -252,6 +252,8 @@ textarea.input { resize: vertical; min-height: 70px; }
 .task .progress { width: 120px; height: 6px; border-radius: 999px; background: var(--surface-3); overflow: hidden; }
 .task .progress > span { display: block; height: 100%; background: var(--gradient); transition: width .3s; }
 .task .pct { font-size: 12px; color: var(--text-muted); width: 38px; text-align: right; }
+.t-check { width: 16px; height: 16px; accent-color: var(--primary); cursor: pointer; flex-shrink: 0; }
+.task-bar { background: var(--surface-2); padding: 10px 12px; border-radius: var(--radius-sm) var(--radius-sm) 0 0; }
 
 /* ============ 设置 ============ */
 .kv-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 16px; }
