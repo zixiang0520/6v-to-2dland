@@ -2,7 +2,10 @@
 # 使用：把 config.json 放到 ./data 目录，然后 docker compose up -d
 services:
   6v-to-2dland:
-    # 本地构建；若已推送到镜像仓库，可改为 image: <registry>/6v-to-2dland:latest
+    # 方式一：拉取已发布的 GHCR 镜像（main 分支每次推送自动更新 :latest）
+    #   image: ghcr.io/zixiang0520/6v-to-2dland:latest
+    #   （私有仓库需先 docker login ghcr.io；也可在下方用 build 本地构建）
+    # 方式二：本地构建（默认）
     build: .
     image: 6v-to-2dland:latest
     container_name: 6v-to-2dland
