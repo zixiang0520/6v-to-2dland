@@ -30,7 +30,7 @@ var (
 
 	// 站内搜索结果条目：<span class="blue14"><a href="详情URL">标题</a></span>
 	blueRe = regexp.MustCompile(`<span\s+class=["']?blue14["']?\s*>\s*<a\s+([^>]*?)>([\s\S]*?)</a>\s*</span>`)
-	hrefRe = regexp.MustCompile(`href\s*=\s*(["']?)([^"'>\s]+)\1`)
+	hrefRe = regexp.MustCompile(`href\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s"'>]+))`)
 
 	// 详情页路径白名单：/分类/.../编号.html
 	detailPathRe = regexp.MustCompile(`/(?:dy|gydy|gq|zydy|jddy|3D|dlz|rj|mj|zy|shoujidianyingmp4|juji|dsj|dm|dongman|dianshiju|zongyi|xiju|dongzuo|kehuan|aiqing|kongbu|zhanzheng|juqing|anime|lianzai|dianshi)/[A-Za-z0-9._/%-]+\.html`)
@@ -217,7 +217,17 @@ func parseSearchItems(htmlText, base string) []Resource {
 		if hm == nil || title == "" {
 			continue
 		}
-		href := html.UnescapeString(strings.TrimSpace(hm[2]))
+		href := ""
+		for _, v := range hm[1:4] {
+			if v != "" {
+				href = v
+				break
+			}
+		}
+		if href == "" {
+			continue
+		}
+		href = html.UnescapeString(strings.TrimSpace(href))
 		if !isDetailPath(href) {
 			continue
 		}
