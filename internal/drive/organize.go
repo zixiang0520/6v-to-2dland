@@ -21,11 +21,19 @@ var videoExts = map[string]bool{
 	".mts": true, ".f4v": true, ".rm": true, ".asf": true,
 }
 
-// epRe 从文件名解析集数：匹配 S01E05 / E05 / EP05（不捕获 Sxx 前缀）。
-var epRe = regexp.MustCompile(`(?i)(?:S\d{1,2})?E(?:P)?(\d{1,3})\b`)
+// epRe 从文件名解析集数：S01E05 / E05 / EP05。
+// 不用 \b：Go RE2 里 \b 对中文边界不可靠；用 (?:^|[^A-Za-z0-9]) 当左边界。
+// 明确排除 720p/1080p 这种分辨率，避免 E80 / E20 误匹配。
+var epRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(?:S\d{1,2})?E(?:P)?(\d{1,3})(?:[^A-Za-z0-9]|$)`)
 
-// epCnRe 匹配中文集数：第5集 / 第05集。
-var epCnRe = regexp.MustCompile(`第(\d{1,3})集`)
+// epCnRe 匹配中文集数：第5集 / 第05集 / 第17话 / 更新04。
+var epCnRe = regexp.MustCompile(`(?:第(\d{1,3})[集话回]|更新(\d{1,3}))`)
+
+// epRangeRe 合集文件名 S02E01-03：取起始集。
+var epRangeRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])S\d{1,2}E(\d{1,3})\s*[-~～]\s*\d{1,3}`)
+
+// fileSeasonRe 从文件名取季数：S02E05 → 2。
+var fileSeasonRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])S(\d{1,2})E\d{1,3}`)
 
 // seasonNumRe 从「第N季」目录名解析季数。
 var seasonNumRe = regexp.MustCompile(`第(\d{1,2})季`)
@@ -141,11 +149,15 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 				res.Skipped = append(res.Skipped, v.Name)
 				continue
 			}
+			season := res.Season
+			if s := parseSeasonFromName(v.Name); s > 0 {
+				season = s
+			}
 			if pureTitle == "" {
 				// 没有标题目录名兜底用纯季集格式
-				newName = fmt.Sprintf("S%02dE%02d%s", res.Season, ep, ext)
+				newName = fmt.Sprintf("S%02dE%02d%s", season, ep, ext)
 			} else {
-				newName = fmt.Sprintf("%sS%02dE%02d%s", pureTitle, res.Season, ep, ext)
+				newName = fmt.Sprintf("%sS%02dE%02d%s", pureTitle, season, ep, ext)
 			}
 		} else {
 			if res.TitleDir == "" {
@@ -260,15 +272,35 @@ func (c *Client) listAllFilesRecursive(ctx context.Context, parentPath string) (
 }
 
 // parseEpisode 从文件名解析集数，解析不到返回 0。
-// 优先匹配 S01E05 / E05 / EP05，再匹配中文「第5集」。
+// 优先合集起始集（S02E01-03 → 1），再 S01E05 / E05 / EP05，再「第5集/第17话/更新04」。
 func parseEpisode(name string) int {
 	base := strings.TrimSuffix(name, path.Ext(name))
+	if m := epRangeRe.FindStringSubmatch(base); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			return n
+		}
+	}
 	if m := epRe.FindStringSubmatch(base); m != nil {
 		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
 			return n
 		}
 	}
 	if m := epCnRe.FindStringSubmatch(base); m != nil {
+		num := m[1]
+		if num == "" {
+			num = m[2]
+		}
+		if n, err := strconv.Atoi(num); err == nil && n > 0 {
+			return n
+		}
+	}
+	return 0
+}
+
+// parseSeasonFromName 从文件名解析季数（S02E05 → 2），没有则返回 0。
+func parseSeasonFromName(name string) int {
+	base := strings.TrimSuffix(name, path.Ext(name))
+	if m := fileSeasonRe.FindStringSubmatch(base); m != nil {
 		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
 			return n
 		}

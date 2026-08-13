@@ -249,6 +249,11 @@ textarea.input { resize: vertical; min-height: 70px; }
   font-variant-numeric: tabular-nums;
   padding: 2px 7px; border-radius: 6px; background: var(--surface-2);
 }
+.home-cat {
+  flex: 0 0 auto;
+  font-size: 11px; font-weight: 500; color: var(--primary);
+  padding: 2px 7px; border-radius: 6px; background: var(--primary-soft);
+}
 .home-row:hover .home-date { background: var(--surface-3); }
 .home-text {
   flex: 1 1 auto; min-width: 0;

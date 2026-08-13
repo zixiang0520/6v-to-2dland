@@ -2,10 +2,29 @@ package site6v
 
 import (
 	"context"
+	"html"
+	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 )
+
+// CategoryRecentDays 11 个分类列表只保留近 N 个自然日（含今天）。
+const CategoryRecentDays = 10
+
+// recentMaxPages 单分类最多翻页，防止日期乱序或站点异常时无限爬。
+const recentMaxPages = 20
+
+// gvodSources 主人指定的「最新」页：整页全抓，不过滤日期。
+var gvodSources = []struct {
+	Path string
+	Name string
+}{
+	{"/gvod/zx.html", "最新电影"},
+	{"/gvod/dsj.html", "最新电视剧"},
+}
 
 // categoryCN 把分类目录名映射为中文（与 drive.categoryNames 保持一致）。
 var categoryCN = map[string]string{
@@ -15,6 +34,9 @@ var categoryCN = map[string]string{
 	"zy": "综艺", "shoujidianyingmp4": "手机电影",
 }
 
+// gvodItemRe 匹配最新页：<li><span>[08-14]</span><a href="/dy/...html">标题</a>
+var gvodItemRe = regexp.MustCompile(`<li>\s*<span>\[(\d{2}-\d{2})\]</span>\s*<a href="(/[^"]+\.html)"[^>]*>([\s\S]*?)</a>`)
+
 func categoryCNName(cat string) string {
 	if n, ok := categoryCN[cat]; ok {
 		return n
@@ -22,91 +44,172 @@ func categoryCNName(cat string) string {
 	return cat
 }
 
-// FetchBrowse 抓取分类的列表页，每个分类取前 perCategory 条。
-// 用于发现页：按分类浏览 6v520 的资源（列表页无封面图，前端用文字列表展示）。
-//   - cat 为空：并发爬取全部 11 个分类，perCategory 默认 100。
-//   - cat 非空：仅爬取该分类（用户点击分类标签后切换展示），perCategory 默认 100。
+// recentCutoff 返回「近 days 日」的最早日期（含当天）。
+func recentCutoff(now time.Time, days int) time.Time {
+	if days <= 0 {
+		days = CategoryRecentDays
+	}
+	y, m, d := now.Date()
+	today := time.Date(y, m, d, 0, 0, 0, 0, now.Location())
+	return today.AddDate(0, 0, -(days - 1))
+}
+
+func parseListDate(s string) (time.Time, bool) {
+	t, err := time.ParseInLocation("2006-01-02", strings.TrimSpace(s), time.Local)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// parseGvodDate 把最新页的 [MM-DD] 补成年月日。跨年时：日期晚于今天则算上一年。
+func parseGvodDate(mmdd string, now time.Time) (string, bool) {
+	mmdd = strings.TrimSpace(mmdd)
+	t, err := time.ParseInLocation("01-02", mmdd, now.Location())
+	if err != nil {
+		return "", false
+	}
+	y, _, _ := now.Date()
+	got := time.Date(y, t.Month(), t.Day(), 0, 0, 0, 0, now.Location())
+	today := time.Date(y, now.Month(), now.Day(), 0, 0, 0, 0, now.Location())
+	if got.After(today) {
+		got = got.AddDate(-1, 0, 0)
+	}
+	return got.Format("2006-01-02"), true
+}
+
+func stripTags(s string) string {
+	s = tagRe.ReplaceAllString(s, "")
+	s = html.UnescapeString(s)
+	return strings.Join(strings.Fields(s), " ")
+}
+
+// FetchRecent 发现页按栏返回：
+//  1. /gvod/zx.html、/gvod/dsj.html 各一栏，整页全抓（不过滤日期）
+//  2. 11 个分类各一栏，只收近 days 天
 //
-// 单分类内串行翻页直到收够 perCategory 条或无更多页。
-func (c *Client) FetchBrowse(ctx context.Context, perCategory int, cat string) ([]BrowseCategory, error) {
+// 栏内按发布日期降序；栏与栏之间不去重（同一部可同时出现在「最新」和分类里）。
+func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, error) {
 	select {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	default:
 	}
-	// 默认每分类前 100 条（取消 20/100 两档加载，直接一次拉满）
-	if perCategory <= 0 {
-		perCategory = 100
+	if days <= 0 {
+		days = CategoryRecentDays
 	}
+	cutoff := recentCutoff(time.Now(), days)
+	now := time.Now()
 
-	// 选择要爬取的分类列表
-	cats := categories
-	if cat != "" {
-		cats = []string{cat}
-	}
-
-	type result struct {
-		cat   string
+	type keyed struct {
+		id    string
+		name  string
 		items []HomeItem
 	}
+	n := len(gvodSources) + len(categories)
 	var wg sync.WaitGroup
-	ch := make(chan result, len(cats))
-	for _, c2 := range cats {
+	ch := make(chan keyed, n)
+
+	for _, src := range gvodSources {
+		wg.Add(1)
+		go func(path, name string) {
+			defer wg.Done()
+			id := "gvod-zx"
+			if strings.Contains(path, "dsj") {
+				id = "gvod-dsj"
+			}
+			items := c.fetchGvodPage(ctx, path, name, now)
+			sortItemsByDate(items)
+			ch <- keyed{id: id, name: name, items: items}
+		}(src.Path, src.Name)
+	}
+	for _, cat := range categories {
 		wg.Add(1)
 		go func(cat string) {
 			defer wg.Done()
-			rs := c.fetchCategoryTopN(ctx, cat, perCategory)
-			items := make([]HomeItem, 0, len(rs))
-			for _, r := range rs {
-				items = append(items, HomeItem{
-					Title:    r.Title,
-					URL:      r.URL,
-					Category: r.Category,
-					Date:     r.Date,
-				})
-			}
-			ch <- result{cat, items}
-		}(c2)
+			items := c.fetchCategoryRecent(ctx, cat, cutoff)
+			sortItemsByDate(items)
+			ch <- keyed{id: cat, name: categoryCNName(cat), items: items}
+		}(cat)
 	}
 	wg.Wait()
 	close(ch)
 
-	// 按 categories 原始顺序输出，跳过空分类
-	byCat := make(map[string][]HomeItem, len(cats))
-	for r := range ch {
-		byCat[r.cat] = r.items
+	got := make(map[string]keyed, n)
+	for k := range ch {
+		got[k.id] = k
 	}
-	out := make([]BrowseCategory, 0, len(cats))
-	for _, c2 := range categories {
-		items := byCat[c2]
-		if len(items) == 0 {
+
+	order := make([]string, 0, n)
+	for _, src := range gvodSources {
+		if strings.Contains(src.Path, "dsj") {
+			order = append(order, "gvod-dsj")
+		} else {
+			order = append(order, "gvod-zx")
+		}
+	}
+	order = append(order, categories...)
+
+	out := make([]HomeCategory, 0, n)
+	for _, id := range order {
+		k, ok := got[id]
+		if !ok {
 			continue
 		}
-		out = append(out, BrowseCategory{
-			Category: c2,
-			Name:     categoryCNName(c2),
-			Items:    items,
-		})
-	}
-	// 单分类请求时直接按抓取结果输出（避免 cat 不在 categories 时返回空）
-	if cat != "" && len(out) == 0 {
-		if items := byCat[cat]; len(items) > 0 {
-			out = append(out, BrowseCategory{
-				Category: cat,
-				Name:     categoryCNName(cat),
-				Items:    items,
-			})
+		if k.items == nil {
+			k.items = []HomeItem{}
 		}
+		out = append(out, HomeCategory{Category: k.id, Name: k.name, Items: k.items})
 	}
 	return out, nil
 }
 
-// fetchCategoryTopN 爬取某分类列表页，直到收集 n 条或无更多页。
-// 复用 list.go 的 itemRe 提取 <li><span>日期</span><a href="...">标题</a>。
-func (c *Client) fetchCategoryTopN(ctx context.Context, cat string, n int) []Resource {
-	var results []Resource
+func sortItemsByDate(items []HomeItem) {
+	sort.SliceStable(items, func(i, j int) bool {
+		if items[i].Date != items[j].Date {
+			return items[i].Date > items[j].Date
+		}
+		return false
+	})
+}
+
+func (c *Client) fetchGvodPage(ctx context.Context, path, sourceName string, now time.Time) []HomeItem {
+	htmlText, err := c.GetCtx(ctx, c.Base+path)
+	if err != nil || htmlText == "" {
+		return nil
+	}
+	matches := gvodItemRe.FindAllStringSubmatch(htmlText, -1)
+	out := make([]HomeItem, 0, len(matches))
 	seen := make(map[string]bool)
-	for page := 1; len(results) < n; page++ {
+	for _, m := range matches {
+		mmdd, href, title := m[1], m[2], stripTags(m[3])
+		date, ok := parseGvodDate(mmdd, now)
+		if !ok || title == "" {
+			continue
+		}
+		abs := c.Base + href
+		if seen[abs] {
+			continue
+		}
+		seen[abs] = true
+		cat := categoryFromPath(href)
+		out = append(out, HomeItem{
+			Title:        title,
+			URL:          abs,
+			Category:     cat,
+			CategoryName: categoryCNName(cat),
+			Date:         date,
+			Source:       sourceName,
+		})
+	}
+	return out
+}
+
+// fetchCategoryRecent 爬某分类列表，收到早于 cutoff 的日期后停止翻页。
+func (c *Client) fetchCategoryRecent(ctx context.Context, cat string, cutoff time.Time) []HomeItem {
+	var results []HomeItem
+	seen := make(map[string]bool)
+	for page := 1; page <= recentMaxPages; page++ {
 		select {
 		case <-ctx.Done():
 			return results
@@ -126,26 +229,30 @@ func (c *Client) fetchCategoryTopN(ctx context.Context, cat string, n int) []Res
 		if len(matches) == 0 {
 			break
 		}
+		hitOld := false
 		added := 0
 		for _, m := range matches {
 			date, href, title := m[1], m[2], m[3]
+			dt, ok := parseListDate(date)
+			if !ok || dt.Before(cutoff) {
+				hitOld = true
+				continue
+			}
 			abs := c.Base + href
 			if seen[abs] {
 				continue
 			}
 			seen[abs] = true
-			results = append(results, Resource{
-				Title:    strings.TrimSpace(title),
-				URL:      abs,
-				Date:     date,
-				Category: cat,
+			results = append(results, HomeItem{
+				Title:        strings.TrimSpace(title),
+				URL:          abs,
+				Category:     cat,
+				CategoryName: categoryCNName(cat),
+				Date:         date,
 			})
 			added++
-			if len(results) >= n {
-				break
-			}
 		}
-		if added == 0 {
+		if hitOld || added == 0 {
 			break
 		}
 	}

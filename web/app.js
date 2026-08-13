@@ -62,8 +62,8 @@
     fileCwd: '/',          // 文件管理当前目录路径
     fileSel: new Set(),    // 选中的文件 identity
     fileItems: [],          // 当前目录文件列表
-    homeCats: [],           // 6v520 各分类条目 [{category,name,items}]（每分类前 100 条）
-    homeActiveCat: null,    // 当前选中的分类目录名
+    homeCats: [],           // 发现页各栏 [{category,name,items}]：最新电影/最新电视剧 + 11 分类
+    homeActiveCat: null,    // 当前选中的栏 id
     pendingHome: null,      // 从发现页点击跳转到搜索页时携带的 {title,url,category}
     theme: 'auto',
     pollTimer: null,
@@ -285,15 +285,14 @@
     };
   }
 
-  // ============ 视图：发现（6v520 各分类列表，纯文字） ============
-  // 抓取策略：GET /api/home 一次拉满所有分类各前 100 条。
-  // 刷新策略：不自动刷新；进入页显示上次缓存，手动点「刷新」或开启「定时刷新」按分钟自动拉取。
+  // ============ 视图：发现（分类标签 + 栏内按发布日） ============
+  // 数据源：最新电影/最新电视剧整页 + 11 分类近 10 天。刷新：进页不自动刷。
   function viewHome() {
     const arOn = localStorage.getItem('home_auto_refresh') === '1';
     const arMin = parseInt(localStorage.getItem('home_refresh_min')) || 5;
     return `
     <div class="page-head">
-      <div><h2>发现</h2><div class="desc">浏览 6v520 各分类最新资源，点击标题直达磁力链</div></div>
+      <div><h2>发现</h2><div class="desc">最新电影/电视剧整页 + 11 分类近 10 天，点标签切换，点击标题直达磁力链</div></div>
       <div class="row gap-sm">
         <label class="auto-refresh" title="开启后按设定分钟数自动刷新发现页">
           <input type="checkbox" id="homeAutoRefresh" ${arOn ? 'checked' : ''}> 定时刷新
@@ -307,16 +306,12 @@
   }
   function bindHome() {
     const btn = $('#btnRefreshHome');
-    if (btn) btn.onclick = () => {
-      state.homeActiveCat = null;
-      loadHome();
-    };
+    if (btn) btn.onclick = () => loadHome();
     const cb = $('#homeAutoRefresh'), min = $('#homeRefreshMin');
     if (cb) cb.onchange = () => { localStorage.setItem('home_auto_refresh', cb.checked ? '1' : '0'); startHomeAutoRefresh(); };
     if (min) min.onchange = () => { const v = Math.max(1, parseInt(min.value) || 5); min.value = v; localStorage.setItem('home_refresh_min', String(v)); startHomeAutoRefresh(); };
     startHomeAutoRefresh();
   }
-  // 定时刷新：按设定分钟数静默拉取（不闪屏）；离开发现页或退出登录时停止。
   function startHomeAutoRefresh() {
     stopHomeAutoRefresh();
     if (localStorage.getItem('home_auto_refresh') !== '1') return;
@@ -326,17 +321,15 @@
   function stopHomeAutoRefresh() {
     if (state.homeRefreshTimer) { clearInterval(state.homeRefreshTimer); state.homeRefreshTimer = null; }
   }
-  // loadHome：并发抓取所有分类，每分类前 100 条（一次拉满，无二次请求）。
-  // silent=true 时为定时刷新：不显示 loading、不重置分类标签，避免闪屏。
   async function loadHome(silent) {
     const grid = $('#homeGrid'), tabs = $('#homeTabs');
     if (!silent) {
-      if (grid) grid.innerHTML = '<div class="loading-box"><span class="spinner"></span> 正在抓取各分类前 100 条（11 分类并发，约 10~20 秒）…</div>';
+      if (grid) grid.innerHTML = '<div class="loading-box"><span class="spinner"></span> 正在抓取最新页 + 11 分类近 10 天…</div>';
       if (tabs) tabs.innerHTML = '';
     }
     const { ok, data } = await api.get('/api/home');
     if (!ok) { if (!silent && grid) grid.innerHTML = `<div class="empty"><div class="ico">⚠️</div>${esc(data.error || '加载失败')}</div>`; return; }
-    state.homeCats = data || [];
+    state.homeCats = (data && data.cats) || [];
     if (!state.homeCats.length) { if (grid) grid.innerHTML = '<div class="empty"><div class="ico">📭</div>未抓取到内容</div>'; return; }
     if (state.homeActiveCat == null || !state.homeCats.some(c => c.category === state.homeActiveCat)) {
       state.homeActiveCat = state.homeCats[0].category;
@@ -348,7 +341,7 @@
     const tabs = $('#homeTabs');
     if (!tabs) return;
     tabs.innerHTML = state.homeCats.map(c =>
-      `<button class="home-tab ${c.category === state.homeActiveCat ? 'active' : ''}" data-cat="${esc(c.category)}">${esc(c.name)}<span class="home-tab-count">${c.items.length}</span></button>`
+      `<button class="home-tab ${c.category === state.homeActiveCat ? 'active' : ''}" data-cat="${esc(c.category)}">${esc(c.name)}<span class="home-tab-count">${(c.items || []).length}</span></button>`
     ).join('');
     $$('.home-tab').forEach(b => b.onclick = () => {
       if (state.homeActiveCat === b.dataset.cat) return;
@@ -357,7 +350,6 @@
       renderHomeGrid();
     });
   }
-  // renderHomeGrid：纯文字列表，每行显示日期 + 标题。
   function renderHomeGrid() {
     const grid = $('#homeGrid');
     if (!grid) return;
@@ -366,7 +358,7 @@
     const items = cat.items || [];
     if (!items.length) { grid.innerHTML = '<div class="empty"><div class="ico">📭</div>该分类暂无内容</div>'; return; }
     grid.innerHTML = items.map((it, i) => {
-      const d = it.date ? it.date.slice(5) : ''; // MM-DD
+      const d = it.date ? it.date.slice(5) : '';
       return `<div class="home-row" data-idx="${i}" title="${esc(it.title)}">
         ${d ? `<span class="home-date">${esc(d)}</span>` : ''}
         <span class="home-text">${esc(it.title)}</span>
@@ -374,7 +366,6 @@
     }).join('');
     $$('.home-row').forEach(el => el.onclick = () => clickHome(+el.dataset.idx));
   }
-  // clickHome：点击发现页条目 → 跳转搜索页 → 自动用标题搜索并展开磁力链。
   function clickHome(i) {
     const cat = state.homeCats.find(c => c.category === state.homeActiveCat);
     if (!cat) return;

@@ -9,6 +9,7 @@ import (
 
 	"6v-to-2dland/internal/cfg"
 	"6v-to-2dland/internal/drive"
+	"6v-to-2dland/internal/site6v"
 	"6v-to-2dland/internal/tmdb"
 )
 
@@ -523,35 +524,28 @@ func (s *Server) filesRecent(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, files)
 }
 
-// ---------- 发现页（各分类列表） ----------
+// ---------- 发现页（最新页全抓 + 11 分类近 N 日） ----------
 //
-// 查询参数：
-//   - cat:   指定分类目录名（如 dy/dlz）。为空时并发抓取所有分类（首屏，每分类前 20 条）。
-//   - limit: 覆盖默认条数。cat 为空时默认 20，cat 非空时默认 100。
-//
-// 前端用法：首屏 GET /api/home（拿到 11 个分类各 20 条的概览，用于展示分类标签）；
-// 用户点击某个分类标签时再 GET /api/home?cat=xxx 拉取该分类前 100 条完整列表。
+// GET /api/home?days=10
+// 数据源：/gvod/zx.html、/gvod/dsj.html 各一栏整页全抓；11 个分类各一栏只收近 days 天（默认 10）。
+// 返回 {days, cats:[{category,name,items}]}，栏内按发布日降序。
 
 func (s *Server) home(w http.ResponseWriter, r *http.Request) {
-	q := r.URL.Query()
-	cat := q.Get("cat")
-	limit := 0
-	if v := q.Get("limit"); v != "" {
-		if n, err := strconv.Atoi(v); err == nil && n > 0 {
-			limit = n
+	days := site6v.CategoryRecentDays
+	if v := r.URL.Query().Get("days"); v != "" {
+		if n, err := strconv.Atoi(v); err == nil && n > 0 && n <= 31 {
+			days = n
 		}
 	}
-	// 首屏全分类抓取超时放宽到 90s；单分类展开通常 3~8s
-	timeout := 90 * time.Second
-	if cat != "" {
-		timeout = 30 * time.Second
-	}
-	ctx, cancel := context.WithTimeout(r.Context(), timeout)
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
 	defer cancel()
-	cats, err := s.site.FetchBrowse(ctx, limit, cat)
+	cats, err := s.site.FetchRecent(ctx, days)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, errResp(err))
 		return
 	}
-	writeJSON(w, http.StatusOK, cats)
+	writeJSON(w, http.StatusOK, map[string]any{
+		"days": days,
+		"cats": cats,
+	})
 }

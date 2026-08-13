@@ -16,9 +16,10 @@ var categoryNames = map[string]string{
 	"zy": "综艺", "shoujidianyingmp4": "手机电影",
 }
 
-// tvCategories 是剧集类分类（会建立第三级「季」目录）。
+// tvCategories 是剧集类分类（会建立第三级「季」目录，整理时按集数重命名）。
+// zydy=动漫新番，连载集数必须当剧集，否则会按电影改成「标题 (年份).ext」丢掉集数。
 var tvCategories = map[string]bool{
-	"dlz": true, "rj": true, "mj": true, "zy": true,
+	"dlz": true, "rj": true, "mj": true, "zy": true, "zydy": true,
 }
 
 func categoryName(cat string) string {
