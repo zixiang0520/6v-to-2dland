@@ -5,8 +5,8 @@ import (
 	"log"
 	"net/http"
 
-	"6v-to-2dland/internal/cfg"
-	"6v-to-2dland/internal/server"
+	"kdocs-baiduyun/internal/cfg"
+	"kdocs-baiduyun/internal/server"
 )
 
 //go:embed all:web
@@ -22,7 +22,7 @@ func main() {
 		log.Printf("提示: 首次启动，请在浏览器打开 http://localhost%s 完成初始化向导", c.Listen)
 	}
 	srv := server.New(c, cfgPath, webFS)
-	log.Printf("6v520 → 2dland 助手已启动，监听 %s", c.Listen)
+	log.Printf("金山文档百度资源搜索已启动，监听 %s", c.Listen)
 	if err := http.ListenAndServe(c.Listen, srv.Routes()); err != nil {
 		log.Fatalf("服务退出: %v", err)
 	}

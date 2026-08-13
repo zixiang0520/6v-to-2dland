@@ -1,22 +1,14 @@
-# 6v520 → 2dland 离线下载助手 —— Docker Compose 示例
-# 使用：把 config.json 放到 ./data 目录，然后 docker compose up -d
+# 金山文档百度网盘链接搜索 —— Docker Compose 示例
+# 使用：docker compose up -d
 services:
-  6v-to-2dland:
-    # 方式一：拉取已发布的 GHCR 镜像（main 分支每次推送自动更新 :latest）
-    #   image: ghcr.io/zixiang0520/6v-to-2dland:latest
-    #   （私有仓库需先 docker login ghcr.io；也可在下方用 build 本地构建）
-    # 方式二：本地构建（默认）
+  kdocs-baiduyun:
     build: .
-    image: 6v-to-2dland:latest
-    container_name: 6v-to-2dland
+    image: kdocs-baiduyun:latest
+    container_name: kdocs-baiduyun
     restart: unless-stopped
     ports:
       # 宿主端口可用 .env 的 HOST_PORT 覆盖（默认 8080），如生产用 28080
       - "${HOST_PORT:-8080}:8080"
     volumes:
-      # 配置 + token 持久化目录（config.json 放在此目录内）
+      # config.json 持久化目录
       - ./data:/app/data
-    # 如需容器内访问宿主代理（TMDB 规范化），取消注释并按需修改：
-    # environment:
-    #   - HTTP_PROXY=http://host.docker.internal:7890
-    #   - HTTPS_PROXY=http://host.docker.internal:7890

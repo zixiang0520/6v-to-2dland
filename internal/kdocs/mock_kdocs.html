@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>模拟 KDocs 百度网盘资源页面</title>
+  <style>
+    body { max-width: 900px; margin: 40px auto; padding: 0 20px; font-family: sans-serif; line-height: 1.7; color: #1f2937; }
+    .otl-paragraph { margin: 8px 0; padding: 10px 14px; border-radius: 8px; background: #f8fafc; }
+    .resource-title { margin-top: 28px; font-size: 18px; font-weight: 700; }
+    .link-title-view { margin-right: 14px; color: #2563eb; }
+    .note { padding: 12px 16px; background: #eff6ff; border-left: 4px solid #2563eb; }
+  </style>
+</head>
+<body>
+  <h1>每日资源更新日志（模拟页面）</h1>
+  <p class="note">此文件模拟金山文档渲染后的 DOM。KDocs 的真实网盘地址主要保存在 a 标签的 url 属性中，而不是 href 属性中。</p>
+
+  <div class="otl-paragraph resource-title">【国剧】示例电视剧 第一季 全 24 集</div>
+  <div class="otl-paragraph">
+    <nodeview data-node-type="link_view" contenteditable="false">
+      <a class="link-title-view common"
+         hreftitle="百度网盘"
+         url="https://pan.baidu.com/s/1ExampleDramaLink?pwd=a1b2"
+         viewtype="titleView"
+         storageversion="1">
+        <span class="link-title-view-name">百度网盘</span>
+      </a>
+    </nodeview>
+  </div>
+
+  <div class="otl-paragraph resource-title">【电影】示例科幻电影 2026 1080P</div>
+  <div class="otl-paragraph">
+    <nodeview data-node-type="link_view" contenteditable="false">
+      <a class="link-title-view common"
+         hreftitle="百度网盘"
+         url="https://pan.baidu.com/s/1ExampleMovieLink"
+         viewtype="titleView">
+        <span class="link-title-view-name">百度网盘</span>
+      </a>
+    </nodeview>
+  </div>
+  <div class="otl-paragraph">提取码：m8n9</div>
+
+  <div class="otl-paragraph resource-title">【纪录片】自然世界 4K</div>
+  <div class="otl-paragraph">
+    <a href="https://pan.baidu.com/s/1NormalHrefLink?pwd=4k88">普通 href 百度链接</a>
+  </div>
+
+  <div class="otl-paragraph resource-title">【动漫】示例动画合集</div>
+  <div class="otl-paragraph">
+    下载地址：https://pan.baidu.com/share/init?surl=ExampleLegacyLink 密码: c7d6
+  </div>
+
+  <div class="otl-paragraph resource-title">【综艺】多网盘链接示例</div>
+  <div class="otl-paragraph">
+    <a class="link-title-view common" url="https://pan.quark.cn/s/NotBaiduLink">夸克网盘分享</a>
+    <a class="link-title-view common" url="https://pan.baidu.com/s/1MultiDriveBaidu?pwd=z9x8">百度网盘</a>
+    <a class="link-title-view common" url="https://drive.uc.cn/s/NotBaiduLink">UC 网盘分享</a>
+  </div>
+
+  <div class="otl-paragraph resource-title">【测试】重复链接不应重复收录</div>
+  <div class="otl-paragraph">
+    <a class="link-title-view common" url="https://pan.baidu.com/s/1MultiDriveBaidu?pwd=z9x8">百度网盘</a>
+  </div>
+
+  <div class="otl-paragraph resource-title">【测试】非百度链接不应收录</div>
+  <div class="otl-paragraph">
+    <a href="https://example.com/file">普通下载地址</a>
+  </div>
+</body>
+</html>

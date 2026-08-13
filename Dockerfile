@@ -19,20 +19,22 @@ COPY . .
 
 # 静态构建，去除调试信息以缩小体积
 ENV CGO_ENABLED=0
-RUN go build -trimpath -ldflags="-s -w" -o /out/6v-to-2dland .
+RUN go build -trimpath -ldflags="-s -w" -o /out/kdocs-baiduyun .
 
 # ============================================================================
-# Runtime —— 极简镜像 + CA 证书（访问 TMDB/2dland HTTPS 必需）
+# Runtime —— Chromium 用于渲染金山文档正文
 # ============================================================================
 FROM alpine:3.20
 
-RUN apk add --no-cache ca-certificates tzdata && \
+RUN apk add --no-cache ca-certificates tzdata chromium && \
     update-ca-certificates
 
-# 工作目录设为 /app/data：config.json / token.json 均以相对路径解析至此，
+ENV KDOCS_BROWSER=/usr/bin/chromium
+
+# 工作目录设为 /app/data：config.json 以相对路径解析至此，
 # 把宿主目录挂载到 /app/data 即可完成配置注入与 token 持久化。
 WORKDIR /app/data
-COPY --from=builder /out/6v-to-2dland /app/6v-to-2dland
+COPY --from=builder /out/kdocs-baiduyun /app/kdocs-baiduyun
 
 EXPOSE 8080
-ENTRYPOINT ["/app/6v-to-2dland"]
+ENTRYPOINT ["/app/kdocs-baiduyun"]
