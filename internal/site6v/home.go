@@ -17,6 +17,9 @@ const CategoryRecentDays = 10
 // recentMaxPages 单分类最多翻页，防止日期乱序或站点异常时无限爬。
 const recentMaxPages = 20
 
+// CacheTTL 发现页缓存时长：降低站点抓取频率，同时消除 nginx 反代超时。
+const CacheTTL = 5 * time.Minute
+
 // homepageSource 站点首页：最新数据（比 gvod 页面更新），整页全抓不过滤日期。
 var homepageSource = struct {
 	Path string
@@ -41,8 +44,48 @@ var categoryCN = map[string]string{
 }
 
 // gvodItemRe 匹配最新页/首页：<li><span>[08-14]</span><a href="/dy/...html">标题</a>
-// 首页的条目 HTML 结构与 gvod 页一致，复用同一正则。
 var gvodItemRe = regexp.MustCompile(`<li>\s*<span>\[(\d{2}-\d{2})\]</span>\s*<a href="(/[^"]+\.html)"[^>]*>([\s\S]*?)</a>`)
+
+// homeCache 发现页结果的全局缓存（key=days, value=结果+时间）。
+var homeCache struct {
+	sync.Mutex
+	data map[int]struct {
+		cats []HomeCategory
+		at   time.Time
+	}
+}
+
+func init() {
+	homeCache.data = make(map[int]struct {
+		cats []HomeCategory
+		at   time.Time
+	})
+}
+
+// GetCachedHome 返回缓存中的发现页数据；过期或空返回 nil。
+func GetCachedHome(days int) ([]HomeCategory, bool) {
+	homeCache.Lock()
+	defer homeCache.Unlock()
+	entry, ok := homeCache.data[days]
+	if !ok {
+		return nil, false
+	}
+	if time.Since(entry.at) > CacheTTL {
+		delete(homeCache.data, days)
+		return nil, false
+	}
+	return entry.cats, true
+}
+
+// SetCachedHome 写入缓存。
+func SetCachedHome(days int, cats []HomeCategory) {
+	homeCache.Lock()
+	defer homeCache.Unlock()
+	homeCache.data[days] = struct {
+		cats []HomeCategory
+		at   time.Time
+	}{cats: cats, at: time.Now()}
+}
 
 func categoryCNName(cat string) string {
 	if n, ok := categoryCN[cat]; ok {
@@ -68,7 +111,6 @@ func parseListDate(s string) (time.Time, bool) {
 	return t, true
 }
 
-// parseGvodDate 把最新页/首页的 [MM-DD] 补成年月日。跨年时：日期晚于今天则算上一年。
 func parseGvodDate(mmdd string, now time.Time) (string, bool) {
 	mmdd = strings.TrimSpace(mmdd)
 	t, err := time.ParseInLocation("01-02", mmdd, now.Location())
@@ -124,14 +166,13 @@ func (c *Client) fetchSourcePage(ctx context.Context, path, sourceName string, n
 	return out
 }
 
-// mergeIntoCats 把一批条目按 URL 路径合并进 catMap（按 URL 去重）。
+// mergeIntoCats 按 URL 路径合并到 catMap。
 func mergeIntoCats(catMap map[string][]HomeItem, items []HomeItem) {
 	for _, it := range items {
 		catMap[it.Category] = append(catMap[it.Category], it)
 	}
 }
 
-// uniqueByURL 按 URL 去重（保留首次出现）。
 func uniqueByURL(items []HomeItem) []HomeItem {
 	seen := make(map[string]bool, len(items))
 	out := make([]HomeItem, 0, len(items))
@@ -147,11 +188,10 @@ func uniqueByURL(items []HomeItem) []HomeItem {
 
 // FetchRecent 发现页按栏返回：
 //  1. 首页（/）→ 「首页推荐」独立栏，放在最前
-//  2. /gvod/zx.html、/gvod/dsj.html 各一栏（保留原有独立展示）
-//  3. 11 个分类各一栏，近 days 天，已合并首页+gvod 条目
+//  2. /gvod/zx.html、/gvod/dsj.html 各一栏
+//  3. 11 个分类各一栏（已合并首页+gvod 条目，去重）
 //
-// 首页/gvod 条目会按 URL 路径分发到对应分类栏，与分类列表结果去重后合并。
-// 栏内按发布日期降序。
+// 每次调用先检查缓存（TTL 5 分钟），未过期直接返回。
 func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, error) {
 	select {
 	case <-ctx.Done():
@@ -161,6 +201,12 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 	if days <= 0 {
 		days = CategoryRecentDays
 	}
+
+	// 命中缓存直接返回
+	if cats, ok := GetCachedHome(days); ok {
+		return cats, nil
+	}
+
 	cutoff := recentCutoff(time.Now(), days)
 	now := time.Now()
 
@@ -194,11 +240,11 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 
 	for _, src := range allSrcs {
 		wg.Add(1)
-		go func(path, _ string) {
+		go func(path string) {
 			defer wg.Done()
 			items := c.fetchSourcePage(ctx, path, homepageSource.Name, now)
 			srcCh <- result{path: path, items: items}
-		}(src.path, src.name)
+		}(src.path)
 	}
 	for _, cat := range categories {
 		wg.Add(1)
@@ -212,9 +258,7 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 	close(srcCh)
 	close(catCh)
 
-	// 收集首页条目（用于「首页推荐」独立栏）
 	highlightItems := make([]HomeItem, 0, 30)
-	// 首页 + gvod 条目按 URL 路径合并到各分类栏
 	catMap := make(map[string][]HomeItem, len(categories))
 
 	for r := range srcCh {
@@ -224,7 +268,6 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 		mergeIntoCats(catMap, r.items)
 	}
 
-	// 合并分类列表结果
 	for r := range catCh {
 		existing := catMap[r.cat]
 		seen := make(map[string]bool, len(existing))
@@ -240,10 +283,8 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 		}
 	}
 
-	// 组装输出
 	out := make([]HomeCategory, 0, 1+len(gvodSources)+len(categories))
 
-	// ① 首页推荐栏
 	highlightItems = uniqueByURL(highlightItems)
 	sortItemsByDate(highlightItems)
 	out = append(out, HomeCategory{
@@ -252,14 +293,6 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 		Items:    highlightItems,
 	})
 
-	// ② gvod 独立栏（重新取，保持独立展示）
-	gvodFetch := func(path, name string) []HomeItem {
-		items := c.fetchSourcePage(ctx, path, name, now)
-		if items == nil {
-			return []HomeItem{}
-		}
-		return items
-	}
 	for _, src := range gvodSources {
 		id := "gvod-zx"
 		name := "最新电影"
@@ -267,12 +300,14 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 			id = "gvod-dsj"
 			name = "最新电视剧"
 		}
-		items := gvodFetch(src.Path, name)
+		items := c.fetchSourcePage(ctx, src.Path, name, now)
+		if items == nil {
+			items = []HomeItem{}
+		}
 		sortItemsByDate(items)
 		out = append(out, HomeCategory{Category: id, Name: name, Items: items})
 	}
 
-	// ③ 分类栏（已合并首页+gvod 条目）
 	for _, cat := range categories {
 		items := catMap[cat]
 		items = uniqueByURL(items)
@@ -283,6 +318,7 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 		out = append(out, HomeCategory{Category: cat, Name: categoryCNName(cat), Items: items})
 	}
 
+	SetCachedHome(days, out)
 	return out, nil
 }
 
@@ -295,7 +331,6 @@ func sortItemsByDate(items []HomeItem) {
 	})
 }
 
-// fetchCategoryRecent 爬某分类列表，收到早于 cutoff 的日期后停止翻页。
 func (c *Client) fetchCategoryRecent(ctx context.Context, cat string, cutoff time.Time) []HomeItem {
 	var results []HomeItem
 	seen := make(map[string]bool)
