@@ -24,7 +24,8 @@ type Server struct {
 	webFS embed.FS
 
 	mu           sync.RWMutex
-	sessionToken string // 单活动会话；登录即替换旧 token
+	setupMu      sync.Mutex // uiSetup 专用：串行化首次初始化，防并发竞态
+	sessionToken string     // 单活动会话；登录即替换旧 token
 }
 
 // New 创建 Server。cfgPath 用于设置变更时回写 config.json。

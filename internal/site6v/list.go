@@ -65,22 +65,30 @@ func (c *Client) searchByAPI(ctx context.Context, keyword string) []Resource {
 		return nil
 	}
 	// 频控：站点要求搜索间隔 ≥3s，否则返回"请不要连续提交"
-	searchMu.Lock()
-	if !lastSearchAt.IsZero() {
-		if wait := minSearchInterval - time.Since(lastSearchAt); wait > 0 {
+	for {
+		searchMu.Lock()
+		if ctx.Err() != nil {
 			searchMu.Unlock()
-			t := time.NewTimer(wait)
-			defer t.Stop()
-			select {
-			case <-t.C:
-			case <-ctx.Done():
-				return nil
-			}
-			searchMu.Lock()
+			return nil
+		}
+		var wait time.Duration
+		if !lastSearchAt.IsZero() {
+			wait = minSearchInterval - time.Since(lastSearchAt)
+		}
+		if wait <= 0 {
+			lastSearchAt = time.Now()
+			searchMu.Unlock()
+			break
+		}
+		searchMu.Unlock()
+		t := time.NewTimer(wait)
+		select {
+		case <-t.C:
+		case <-ctx.Done():
+			t.Stop()
+			return nil
 		}
 	}
-	lastSearchAt = time.Now()
-	searchMu.Unlock()
 
 	htmlText, err := c.postSearch(ctx, keyword)
 	if err != nil || htmlText == "" {

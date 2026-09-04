@@ -71,6 +71,10 @@ func (s *Server) uiLogout(w http.ResponseWriter, r *http.Request) {
 
 // uiSetup 仅在未设置访问密码时可用（首次部署引导）。
 func (s *Server) uiSetup(w http.ResponseWriter, r *http.Request) {
+	// setupMu 串行化首次初始化：消除预检查与写入之间的 TOCTOU 竞态，
+	// 并发 setup 请求只有一个能完成初始化。
+	s.setupMu.Lock()
+	defer s.setupMu.Unlock()
 	c := s.snapshotConfig()
 	if c.AccessPassword != "" {
 		writeJSON(w, http.StatusForbidden, errStr("已初始化，修改请用设置页"))

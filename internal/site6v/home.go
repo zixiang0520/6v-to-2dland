@@ -240,11 +240,11 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 
 	for _, src := range allSrcs {
 		wg.Add(1)
-		go func(path string) {
+		go func(path, name string) {
 			defer wg.Done()
-			items := c.fetchSourcePage(ctx, path, homepageSource.Name, now)
+			items := c.fetchSourcePage(ctx, path, name, now)
 			srcCh <- result{path: path, items: items}
-		}(src.path)
+		}(src.path, src.name)
 	}
 	for _, cat := range categories {
 		wg.Add(1)
@@ -260,10 +260,13 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 
 	highlightItems := make([]HomeItem, 0, 30)
 	catMap := make(map[string][]HomeItem, len(categories))
+	gvodItems := make(map[string][]HomeItem, len(gvodSources))
 
 	for r := range srcCh {
 		if r.path == homepageSource.Path {
 			highlightItems = append(highlightItems, r.items...)
+		} else {
+			gvodItems[r.path] = r.items
 		}
 		mergeIntoCats(catMap, r.items)
 	}
@@ -300,11 +303,12 @@ func (c *Client) FetchRecent(ctx context.Context, days int) ([]HomeCategory, err
 			id = "gvod-dsj"
 			name = "最新电视剧"
 		}
-		items := c.fetchSourcePage(ctx, src.Path, name, now)
+		// 复用并行阶段已抓取的结果（此前这里会串行重抓同一页面：
+		// 重复请求站点、拖慢发现页，重抓失败时栏目还会意外清空）。
+		items := gvodItems[src.Path]
 		if items == nil {
 			items = []HomeItem{}
 		}
-		sortItemsByDate(items)
 		out = append(out, HomeCategory{Category: id, Name: name, Items: items})
 	}
 
