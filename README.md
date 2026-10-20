@@ -18,7 +18,13 @@
 - 🔐 **UI 访问鉴权**：访问密码 + HttpOnly Cookie 会话；首次启动走初始化向导（设密码 + 填 2dland 凭证 + TMDB）。
 - ⚙️ **设置热更新**：2dland 凭证 / TMDB / 站点 / 根目录等在设置页改完即时生效，无需重启或改 config 文件。
 - 🌐 **2dland 设备码登录**：UI 内完成 OAuth 设备码授权，token 持久化到挂载目录，容器重启免重新授权。
-- 📋 **任务管理**：查看 2dland 离线下载队列与进度，单条任务可🗑删除（调 2dland API 同步，可选同时删文件）。
+- 📋 **任务管理**：查看 2dland 离线下载队列与进度，单条任务可🗑删除（调 2dland API 同步，可选同时删文件）；支持**批量整理**（勾选多条一次整理）与🔎**探测已整理**（标出哪些任务已归档）。
+- 🤖 **自动整理**：任务下载完成后自动清理广告文件并把视频按集数搬进标题目录（后台轮询触发，无需手动点）。
+- 🏠 **发现页**：首页推荐 + 11 个分类「近 N 日」（默认 10 天），整页全抓 + 后端内存缓存；支持勾选多条**批量下载**。
+- 🗂️ **网盘文件管理**：浏览 2dland 目录、新建/重命名/移动（拖拽）/删除，查看回收站与恢复，以及全局「最近文件」排查丢失文件。
+- ⭐ **关注**：把感兴趣的资源加为关注（持久化到 `follows.json`，容器重启不丢），一键重抓 6v 页面标题刷新名称。
+- 🚦 **飞牛影视 / OpenList 联动**：接入飞牛影视（fnOS）API 与 OpenList/AList，用媒体库模糊搜索定位已有剧目录。
+- 🛡️ **频控自愈**：2dland 返回 429 后进入冷却期并拒绝推送，避免反复触发风控；可一键**清除限流状态**手动重试。
 - 🌓 **暗色模式**：自动跟随系统 / 手动切换。
 - 🐳 **Docker 部署**：多阶段构建静态二进制 + 极简 alpine 运行时，单容器 + 一个挂载目录即跑。
 
@@ -157,7 +163,7 @@ go test ./...
 | `POST` | `/api/ui/setup` | 首次初始化向导 |
 | `GET` | `/api/auth/status` | 2dland 登录状态 |
 | `POST` | `/api/auth/login` | 启动 2dland 设备码授权 |
-| `POST` | `/api/auth/poll` | 轮询 2dland 授权结果 |
+| `GET` | `/api/auth/poll` | 轮询 2dland 授权结果 |
 | `POST` | `/api/auth/logout` | 2dland 登出 |
 | `GET` | `/api/search?q=` | 搜索 6v520 资源 |
 | `GET` | `/api/home?days=10` | 发现页数据（最新页整页全抓 + 11 分类近 N 日，5 分钟缓存） |
@@ -166,6 +172,9 @@ go test ./...
 | `GET` | `/api/tasks` | 列出 2dland 离线任务 |
 | `POST` | `/api/tasks/delete` | 删除单个任务（同步 2dland，body: `{identity, delete_files}`） |
 | `POST` | `/api/tasks/organize` | 整理任务下载文件到标题目录（body: `{save_path}`） |
+| `POST` | `/api/tasks/organize-batch` | 批量整理（body: `{items:[{save_path, name}]}`，返回逐条 ok/error） |
+| `POST` | `/api/tasks/probe` | 探测全部任务是否已整理，返回带 `organized` 标记的任务列表 |
+| `POST` | `/api/drive/clear-rate-limit` | 清除 2dland 限流冷却状态（429 被拒后可手动重试） |
 | `GET` | `/api/files?path=/` | 浏览 2dland 网盘目录（省略 `path` 即根目录） |
 | `POST` | `/api/files/mkdir` | 新建目录（body: `{parent, name}`） |
 | `POST` | `/api/files/rename` | 重命名（body: `{identity, name}`） |
@@ -174,6 +183,10 @@ go test ./...
 | `GET` | `/api/files/trash` | 列出 2dland 回收站 |
 | `POST` | `/api/files/recover` | 从回收站恢复（body: `{identities}`） |
 | `GET` | `/api/files/recent` | 最近更新的文件（全局，用于排查丢失文件） |
+| `GET` | `/api/follows` | 列出关注的资源（持久化在 `follows.json`） |
+| `POST` | `/api/follows` | 新增关注（body: `{keyword, title, category, sixv_url}`，`keyword` 必填） |
+| `POST` | `/api/follows/delete` | 删除关注（body: `{id}`） |
+| `POST` | `/api/follows/rename` | 重抓 6v 页面标题刷新关注名称（body: `{id}`） |
 | `GET` | `/api/settings` | 读取设置 |
 | `POST` | `/api/settings` | 保存设置（热更新） |
 | `POST` | `/api/settings/test` | TMDB 连接测试 |
@@ -203,11 +216,13 @@ go test ./...
 │   │   ├── organize.go          #   下载完成整理（按集数搬进标题目录）
 │   │   ├── files.go             #   网盘文件管理（列表/新建/重命名/移动/删除/回收站/恢复）
 │   │   └── season.go            #   季数解析正则
+│   ├── fnos/client.go           # 飞牛影视（fnOS）API 客户端
+│   ├── openlist/client.go       # OpenList/AList 客户端（媒体库模糊搜索定位剧目录）
 │   └── server/                  # HTTP 服务
 │       ├── server.go            #   路由 + 鉴权中间件 + 会话
-│       └── handlers.go           #   各接口 handler
-├── cmd/movetest/main.go         # Move 稳定性测试工具（防丢文件）
-├── web/                         # 前端（多页 SPA：hash 路由 search/tasks/settings）
+│       ├── handlers.go          #   各接口 handler
+│       └── clear_rate_limit.go  #   清除 2dland 频控限流状态
+├── web/                         # 前端（hash 路由 SPA：home/search/follows/tasks/files/settings）
 │   ├── index.html
 │   ├── style.css                #   暗色模式 + CSS 变量
 │   └── app.js                   #   交互逻辑
