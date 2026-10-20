@@ -10,6 +10,7 @@ import (
 type Config struct {
 	Listen         string `json:"listen"`          // HTTP 监听地址，默认 :8080
 	BaseDir        string `json:"base_dir"`        // 2dland 网盘内根目录名，默认 6v下载
+	OrganizedDir   string `json:"organized_dir"`   // 下载完成后移动到 base_dir 下的目录名，默认 已下载
 	MaxPages       int    `json:"max_pages"`       // 每个分类最大翻页数，默认 8
 	ClientID       string `json:"client_id"`       // 2dland 开放平台 client_id
 	ClientSecret   string `json:"client_secret"`   // 2dland 开放平台 client_secret
@@ -20,17 +21,36 @@ type Config struct {
 	TmdbAPIKey string `json:"tmdb_api_key"`  // TMDB API Key，留空则不规范化
 	TmdbProxy  string `json:"tmdb_proxy"`    // 访问 TMDB 的代理，如 http://127.0.0.1:7890
 	TmdbLang   string `json:"tmdb_language"` // TMDB 语言，默认 zh-CN
+
+	// 订阅追更
+	SubIntervalMinutes int    `json:"sub_interval_minutes"` // 兼容旧全局检查间隔
+	SubPushSafetyLimit int    `json:"sub_push_safety_limit"` // 单次自动推送集数安全上限，默认20
+	OpenlistURL        string `json:"openlist_url"`         // OpenList/AList 地址，如 http://nas.zx.al:5244
+	OpenlistUser       string `json:"openlist_user"`        // OpenList 账号
+	OpenlistPass       string `json:"openlist_pass"`        // OpenList 密码
+	OpenlistBase       string `json:"openlist_base"`        // 媒体库根路径（模糊搜索剧目录的起点），默认 /
+
+	// 飞牛影视（fnOS）绑定
+	FnosURL     string `json:"fnos_url"`      // 飞牛影视地址，如 http://nas.example.com:5666
+	FnosUser    string `json:"fnos_user"`     // 飞牛影视账号
+	FnosPass    string `json:"fnos_pass"`     // 飞牛影视密码
+	FnosSecret  string `json:"fnos_secret"`   // 飞牛影视 API Secret（authx）
+	FnosAPIKey  string `json:"fnos_api_key"`  // 飞牛影视 API Key（authx）
 }
 
 // Defaults 返回带默认值的配置。
 func Defaults() *Config {
 	return &Config{
-		Listen:    ":8080",
-		BaseDir:   "6v下载",
-		MaxPages:  8,
-		TokenFile: "token.json",
-		SiteBase:  "https://www.6v520.com",
-		TmdbLang:  "zh-CN",
+		Listen:       ":8080",
+		BaseDir:      "6v下载",
+		OrganizedDir: "已下载",
+		MaxPages:     8,
+		TokenFile:    "token.json",
+		SiteBase:     "https://www.6v520.com",
+		TmdbLang:     "zh-CN",
+		SubIntervalMinutes: 120,
+		SubPushSafetyLimit: 20,
+		OpenlistBase:       "/",
 	}
 }
 
@@ -52,6 +72,9 @@ func Load(path string) (*Config, error) {
 	}
 	if c.BaseDir == "" {
 		c.BaseDir = "6v下载"
+	}
+	if c.OrganizedDir == "" {
+		c.OrganizedDir = "已下载"
 	}
 	if c.MaxPages <= 0 {
 		c.MaxPages = 8

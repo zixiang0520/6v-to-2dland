@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"io/fs"
 	"net/http"
+	"path/filepath"
 	"sync"
 
 	"6v-to-2dland/internal/cfg"
@@ -30,6 +31,8 @@ type Server struct {
 
 // New 创建 Server。cfgPath 用于设置变更时回写 config.json。
 func New(c *cfg.Config, cfgPath string, webFS embed.FS) *Server {
+	// 关注持久化：follows.json 与 token.json 同目录（data 挂载卷），容器重启不丢。
+	_followStore = newFollowStore(filepath.Join(filepath.Dir(c.TokenFile), "follows.json"))
 	return &Server{
 		cfg:     c,
 		cfgPath: cfgPath,
@@ -96,6 +99,13 @@ func (s *Server) requireAuth(h http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// randomBytes 生成随机字节。
+func randomBytes(n int) []byte {
+	b := make([]byte, n)
+	rand.Read(b)
+	return b
+}
+
 // Routes 返回 HTTP 处理器（API + 前端静态资源）。
 func (s *Server) Routes() http.Handler {
 	mux := http.NewServeMux()
@@ -119,6 +129,9 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/tasks", s.requireAuth(s.tasks))
 	mux.HandleFunc("POST /api/tasks/delete", s.requireAuth(s.deleteTask))
 	mux.HandleFunc("POST /api/tasks/organize", s.requireAuth(s.taskOrganize))
+	mux.HandleFunc("POST /api/tasks/organize-batch", s.requireAuth(s.taskOrganizeBatch))
+	mux.HandleFunc("POST /api/tasks/probe", s.requireAuth(s.taskProbe))
+	mux.HandleFunc("POST /api/drive/clear-rate-limit", s.requireAuth(s.clearRateLimit))
 	// 文件管理（直接管理 2dland 网盘）
 	mux.HandleFunc("GET /api/files", s.requireAuth(s.filesList))
 	mux.HandleFunc("POST /api/files/mkdir", s.requireAuth(s.filesMkdir))
@@ -131,6 +144,11 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("GET /api/settings", s.requireAuth(s.settingsGet))
 	mux.HandleFunc("POST /api/settings", s.requireAuth(s.settingsPost))
 	mux.HandleFunc("POST /api/settings/test", s.requireAuth(s.settingsTest))
+	// 关注
+	mux.HandleFunc("GET /api/follows", s.requireAuth(s.followsList))
+	mux.HandleFunc("POST /api/follows", s.requireAuth(s.followsAdd))
+	mux.HandleFunc("POST /api/follows/delete", s.requireAuth(s.followsDelete))
+	mux.HandleFunc("POST /api/follows/rename", s.requireAuth(s.followsRename))
 
 	sub, err := fs.Sub(s.webFS, "web")
 	if err != nil {

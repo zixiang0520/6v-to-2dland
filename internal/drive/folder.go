@@ -2,8 +2,10 @@ package drive
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"strings"
+	"time"
 
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/userfile"
 )
@@ -33,6 +35,12 @@ func categoryName(cat string) string {
 }
 
 func isTVCategory(cat string) bool { return tvCategories[cat] }
+
+// IsTVCategory 判断 6v 分类目录名是否为剧集类（供订阅等外部模块复用）。
+func IsTVCategory(cat string) bool { return isTVCategory(cat) }
+
+// CategoryName 返回分类目录在网盘里的中文目录名。
+func CategoryName(cat string) string { return categoryName(cat) }
 
 // sanitize 清理文件夹名中的非法字符。
 func sanitize(name string) string {
@@ -80,6 +88,48 @@ func ensureFolderByCategory(ctx context.Context, s snapshot, category, titleName
 	}
 	log.Printf("ensureFolderByCategory: done savePath=%q", titlePath)
 	return titlePath, nil
+}
+
+// ensureSubscriptionFolder 为订阅自动推送建立最终目录：
+// /<baseDir>/<organizedDir>/<分类>/<标题>/第N季/YYYY-MM-DD。
+// 该入口仅由订阅使用，普通手动推送仍走 ensureFolderByCategory。
+func ensureSubscriptionFolder(ctx context.Context, s snapshot, category, titleName, seasonName, dateName string) (string, error) {
+	if seasonName == "" {
+		return "", fmt.Errorf("订阅日期目录缺少季目录")
+	}
+	if _, err := time.Parse("2006-01-02", dateName); err != nil {
+		return "", fmt.Errorf("非法订阅日期目录 %q", dateName)
+	}
+	base, baseID, err := ensureDir(ctx, s.userfile, "/", "", s.baseDir)
+	if err != nil {
+		return "", err
+	}
+	organizedName := sanitize(s.organizedDir)
+	if organizedName == "" {
+		organizedName = "已下载"
+	}
+	organized, organizedID, err := ensureDir(ctx, s.userfile, base, baseID, organizedName)
+	if err != nil {
+		return "", err
+	}
+	cat, catID, err := ensureDir(ctx, s.userfile, organized, organizedID, categoryName(category))
+	if err != nil {
+		return "", err
+	}
+	titlePath, titleID, err := ensureDir(ctx, s.userfile, cat, catID, titleName)
+	if err != nil {
+		return "", err
+	}
+	seasonPath, seasonID, err := ensureDir(ctx, s.userfile, titlePath, titleID, seasonName)
+	if err != nil {
+		return "", err
+	}
+	datePath, _, err := ensureDir(ctx, s.userfile, seasonPath, seasonID, dateName)
+	if err != nil {
+		return "", err
+	}
+	log.Printf("ensureSubscriptionFolder: done savePath=%q", datePath)
+	return datePath, nil
 }
 
 // ensureDir 在 parentPath（用于 normalizePath 兜底）下确保名为 name 的目录存在。

@@ -2,9 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
+	"log"
 	"net/http"
+	"os"
+	"sort"
 	"strconv"
+	"sync"
 	"time"
 
 	"6v-to-2dland/internal/cfg"
@@ -219,11 +224,78 @@ func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errStr("缺少 identities"))
 		return
 	}
-	if err := s.drive.DeleteTask(r.Context(), body.Identities, body.DeleteFiles); err != nil {
+	// 安全策略：本应用删除离线任务永远只删任务记录，绝不联动删除网盘文件。
+	// 2dland 的 delete_files=true 会直接把任务保存目录内容送入回收站，容易误删整季/整类资源。
+	if body.DeleteFiles {
+		log.Printf("SECURITY: blocked deleteTask delete_files=true identities=%d remote=%s", len(body.Identities), r.RemoteAddr)
+		writeJSON(w, http.StatusForbidden, errStr("安全保护：本应用禁止随任务删除已下载文件，请在文件管理中逐项核对"))
+		return
+	}
+	log.Printf("AUDIT: deleteTask tasks_only identities=%d remote=%s", len(body.Identities), r.RemoteAddr)
+	if err := s.drive.DeleteTask(r.Context(), body.Identities, false); err != nil {
 		writeJSON(w, http.StatusInternalServerError, errResp(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// taskOrganizeBatch 批量整理/转移已完成任务的下载文件（「转移已下载」「批量整理」共用）。
+// 逐项调 OrganizeTask：转移到已下载 + 删广告 + 规范命名；单项失败不影响其余项。
+func (s *Server) taskOrganizeBatch(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Items []struct {
+			SavePath string `json:"save_path"`
+			Name     string `json:"name"`
+		} `json:"items"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if len(body.Items) == 0 {
+		writeJSON(w, http.StatusBadRequest, errStr("未选择任务"))
+		return
+	}
+	type itemOut struct {
+		Name     string                `json:"name"`
+		SavePath string                `json:"save_path"`
+		OK       bool                  `json:"ok"`
+		Error    string                `json:"error,omitempty"`
+		Result   *drive.OrganizeResult `json:"result,omitempty"`
+	}
+	out := make([]itemOut, 0, len(body.Items))
+	for _, it := range body.Items {
+		row := itemOut{Name: it.Name, SavePath: it.SavePath}
+		if it.SavePath == "" {
+			row.Error = "缺少 save_path"
+			out = append(out, row)
+			continue
+		}
+		ctx, cancel := context.WithTimeout(r.Context(), 120*time.Second)
+		res, err := s.drive.OrganizeTask(ctx, it.SavePath)
+		cancel()
+		if err != nil {
+			row.Error = err.Error()
+		} else {
+			row.OK = true
+			row.Result = res
+		}
+		out = append(out, row)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"items": out})
+}
+
+// taskProbe 探测全部任务的已整理状态（「探测已整理」按钮），返回带 organized 标记的任务列表。
+func (s *Server) taskProbe(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 90*time.Second)
+	defer cancel()
+	tasks, err := s.drive.ListTasks(ctx)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	s.drive.ProbeTasks(ctx, tasks)
+	writeJSON(w, http.StatusOK, tasks)
 }
 
 // taskOrganize 整理一个已完成任务下载的文件：删除广告文件 + 规范化视频文件名。
@@ -552,4 +624,220 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 		"days": days,
 		"cats": cats,
 	})
+}
+
+// ---------- 关注功能 ----------
+
+type Follow struct {
+	ID         string    `json:"id"`
+	Title      string    `json:"title"`
+	Keyword    string    `json:"keyword"`
+	Category   string    `json:"category"`
+	SixvURL    string    `json:"sixv_url"`
+	CreatedAt  string    `json:"created_at"`
+	UpdatedAt  string    `json:"updated_at"`
+	Magnets    []Magnet  `json:"magnets"`
+}
+type Magnet struct {
+	Name   string `json:"name"`
+	Desc   string `json:"desc"`
+	Magnet string `json:"magnet"`
+}
+
+// followStore 文件持久化的关注存储（follows.json 与 token.json 同目录，容器重启不丢）。
+type followStore struct {
+	mu      sync.RWMutex
+	path    string
+	follows map[string]*Follow
+}
+
+// newFollowStore 创建存储并从磁盘加载已有关注。
+func newFollowStore(path string) *followStore {
+	st := &followStore{path: path, follows: make(map[string]*Follow)}
+	b, err := os.ReadFile(path)
+	if err == nil {
+		var list []*Follow
+		if json.Unmarshal(b, &list) == nil {
+			for _, f := range list {
+				if f != nil && f.ID != "" {
+					st.follows[f.ID] = f
+				}
+			}
+		}
+	} else if !os.IsNotExist(err) {
+		log.Printf("follow store: load %s failed: %v", path, err)
+	}
+	return st
+}
+
+// save 原子写盘（调用方已持写锁）。
+func (s *followStore) save() {
+	list := make([]*Follow, 0, len(s.follows))
+	for _, f := range s.follows {
+		list = append(list, f)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].CreatedAt < list[j].CreatedAt })
+	b, err := json.MarshalIndent(list, "", "  ")
+	if err != nil {
+		log.Printf("follow store: marshal failed: %v", err)
+		return
+	}
+	tmp := s.path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0600); err != nil {
+		log.Printf("follow store: write failed: %v", err)
+		return
+	}
+	if err := os.Rename(tmp, s.path); err != nil {
+		log.Printf("follow store: rename failed: %v", err)
+	}
+}
+
+func (s *followStore) Add(f *Follow) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.follows[f.ID]; ok {
+		return false
+	}
+	s.follows[f.ID] = f
+	s.save()
+	return true
+}
+
+func (s *followStore) Get(id string) *Follow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.follows[id]
+}
+
+func (s *followStore) List() []*Follow {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	out := make([]*Follow, 0, len(s.follows))
+	for _, f := range s.follows {
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt < out[j].CreatedAt })
+	return out
+}
+
+func (s *followStore) Delete(id string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, ok := s.follows[id]; !ok {
+		return false
+	}
+	delete(s.follows, id)
+	s.save()
+	return true
+}
+
+// UpdateTitle 更新关注标题（刷新链接名称用）；存在返回更新后的记录，否则 nil。
+func (s *followStore) UpdateTitle(id, title string) *Follow {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, ok := s.follows[id]
+	if !ok {
+		return nil
+	}
+	f.Title = title
+	f.UpdatedAt = time.Now().Format(time.RFC3339)
+	s.save()
+	return f
+}
+
+// _followStore 在 Server.New 里按配置路径初始化（follows.json 与 token.json 同目录）。
+var _followStore *followStore
+
+func (s *Server) followsList(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]any{"items": _followStore.List()})
+}
+
+func (s *Server) followsAdd(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Keyword  string `json:"keyword"`
+		Title    string `json:"title"`
+		Category string `json:"category"`
+		SixvURL  string `json:"sixv_url"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if body.Keyword == "" {
+		writeJSON(w, http.StatusBadRequest, errStr("关键词不能为空"))
+		return
+	}
+	now := time.Now().Format(time.RFC3339)
+	f := &Follow{
+		ID:         "follow_" + hex.EncodeToString(randomBytes(4)),
+		Title:      body.Title,
+		Keyword:    body.Keyword,
+		Category:   body.Category,
+		SixvURL:    body.SixvURL,
+		CreatedAt:  now,
+		UpdatedAt:  now,
+		Magnets:    []Magnet{},
+	}
+	if !_followStore.Add(f) {
+		writeJSON(w, http.StatusConflict, errStr("该关注已存在"))
+		return
+	}
+	writeJSON(w, http.StatusOK, f)
+}
+
+func (s *Server) followsDelete(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.ID == "" {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少关注 ID"))
+		return
+	}
+	if !_followStore.Delete(body.ID) {
+		writeJSON(w, http.StatusNotFound, errStr("关注不存在"))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+}
+
+// followsRename 刷新关注链接名称：重新抓取 6v 页面标题并更新。
+// 优先用固定链接抓页面 <title>；无链接或抓取失败时回退关键词搜索第一条的标题。
+func (s *Server) followsRename(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		ID string `json:"id"`
+	}
+	if err := decodeJSON(r, &body); err != nil || body.ID == "" {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少关注 ID"))
+		return
+	}
+	f := _followStore.Get(body.ID)
+	if f == nil {
+		writeJSON(w, http.StatusNotFound, errStr("关注不存在"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
+	defer cancel()
+	var title string
+	if f.SixvURL != "" {
+		if t, err := s.site.FetchTitle(ctx, f.SixvURL); err == nil && t != "" {
+			title = t
+		}
+	}
+	if title == "" {
+		c := s.snapshotConfig()
+		rs := s.site.Search(ctx, f.Keyword, c.MaxPages)
+		if len(rs) > 0 {
+			title = rs[0].Title
+		}
+	}
+	if title == "" {
+		writeJSON(w, http.StatusBadGateway, errStr("未能获取页面标题，请稍后重试或手动编辑"))
+		return
+	}
+	updated := _followStore.UpdateTitle(body.ID, title)
+	if updated == nil {
+		writeJSON(w, http.StatusNotFound, errStr("关注不存在"))
+		return
+	}
+	writeJSON(w, http.StatusOK, updated)
 }

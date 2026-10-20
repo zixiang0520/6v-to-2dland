@@ -64,6 +64,8 @@
     fileItems: [],          // 当前目录文件列表
     homeCats: [],           // 发现页各栏 [{category,name,items}]：最新电影/最新电视剧 + 11 分类
     homeActiveCat: null,    // 当前选中的栏 id
+    homePicked: new Map(),  // url -> {title,url,category} 发现页勾选的条目
+    magCache: new Map(),    // url -> magnets[] 详情页磁力缓存
     pendingHome: null,      // 从发现页点击跳转到搜索页时携带的 {title,url,category}
     theme: 'auto',
     pollTimer: null,
@@ -117,7 +119,7 @@
 
   function onHash() {
     const h = location.hash.slice(1);
-    state.view = ['home', 'search', 'tasks', 'files', 'settings'].includes(h) ? h : 'home';
+    state.view = ['home', 'search', 'tasks', 'follows', 'files', 'settings'].includes(h) ? h : 'home';
     render();
   }
 
@@ -146,6 +148,7 @@
       if (state.homeCats.length) { renderHomeTabs(); renderHomeGrid(); }
     }
     else if (state.view === 'tasks') { c.innerHTML = viewTasks(); bindTasks(); loadTasks(); }
+    else if (state.view === 'follows') { c.innerHTML = viewFollows(); bindFollows(); loadFollows(); }
     else if (state.view === 'files') { c.innerHTML = viewFiles(); bindFiles(); loadFiles(); }
     else if (state.view === 'settings') { c.innerHTML = viewSettingsLoading(); loadSettings(); }
     else { c.innerHTML = viewSearch(); bindSearch(); renderSelected(); }
@@ -254,6 +257,7 @@
           <a class="nav-item ${state.view === 'home' ? 'active' : ''}" href="#home">🏠 发现</a>
           <a class="nav-item ${state.view === 'search' ? 'active' : ''}" href="#search">🔍 搜索</a>
           <a class="nav-item ${state.view === 'tasks' ? 'active' : ''}" href="#tasks">📋 任务</a>
+          <a class="nav-item ${state.view === 'follows' ? 'active' : ''}" href="#follows">⭐ 关注</a>
           <a class="nav-item ${state.view === 'files' ? 'active' : ''}" href="#files">📂 文件</a>
           <a class="nav-item ${state.view === 'settings' ? 'active' : ''}" href="#settings">⚙ 设置</a>
         </nav>
@@ -268,6 +272,7 @@
         <a class="m-nav-item ${state.view === 'home' ? 'active' : ''}" href="#home"><span class="m-ico">🏠</span><span class="m-lbl">发现</span></a>
         <a class="m-nav-item ${state.view === 'search' ? 'active' : ''}" href="#search"><span class="m-ico">🔍</span><span class="m-lbl">搜索</span></a>
         <a class="m-nav-item ${state.view === 'tasks' ? 'active' : ''}" href="#tasks"><span class="m-ico">📋</span><span class="m-lbl">任务</span></a>
+        <a class="m-nav-item ${state.view === 'follows' ? 'active' : ''}" href="#follows"><span class="m-ico">⭐</span><span class="m-lbl">关注</span></a>
         <a class="m-nav-item ${state.view === 'files' ? 'active' : ''}" href="#files"><span class="m-ico">📂</span><span class="m-lbl">文件</span></a>
         <a class="m-nav-item ${state.view === 'settings' ? 'active' : ''}" href="#settings"><span class="m-ico">⚙</span><span class="m-lbl">设置</span></a>
       </nav>
@@ -292,8 +297,12 @@
     const arMin = parseInt(localStorage.getItem('home_refresh_min')) || 5;
     return `
     <div class="page-head">
-      <div><h2>发现</h2><div class="desc">最新电影/电视剧整页 + 11 分类近 10 天，点标签切换，点击标题直达磁力链</div></div>
+      <div><h2>发现</h2><div class="desc">勾选条目前的方框，点「批量下载」选磁力再推送；点标题仍可进详情</div></div>
       <div class="row gap-sm">
+        <label class="auto-refresh" title="全选当前分类">
+          <input type="checkbox" id="homeSelectAll"> 全选本栏
+        </label>
+        <button class="btn primary" id="btnHomeBatch" disabled>⬇ 批量下载</button>
         <label class="auto-refresh" title="开启后按设定分钟数自动刷新发现页">
           <input type="checkbox" id="homeAutoRefresh" ${arOn ? 'checked' : ''}> 定时刷新
           <input type="number" id="homeRefreshMin" class="input-num" value="${arMin}" min="1" max="1440"> 分钟
@@ -302,7 +311,8 @@
       </div>
     </div>
     <div id="homeTabs" class="home-tabs"></div>
-    <div id="homeGrid" class="home-list"><div class="empty"><div class="ico">📥</div>点击右上角「⟳ 刷新」加载最新资源</div></div>`;
+    <div id="homeGrid" class="home-list"><div class="empty"><div class="ico">📥</div>点击右上角「⟳ 刷新」加载最新资源</div></div>
+    <div id="homeFab"></div>`;
   }
   function bindHome() {
     const btn = $('#btnRefreshHome');
@@ -310,7 +320,12 @@
     const cb = $('#homeAutoRefresh'), min = $('#homeRefreshMin');
     if (cb) cb.onchange = () => { localStorage.setItem('home_auto_refresh', cb.checked ? '1' : '0'); startHomeAutoRefresh(); };
     if (min) min.onchange = () => { const v = Math.max(1, parseInt(min.value) || 5); min.value = v; localStorage.setItem('home_refresh_min', String(v)); startHomeAutoRefresh(); };
+    const all = $('#homeSelectAll');
+    if (all) all.onchange = () => toggleHomeSelectAll(all.checked);
+    const batch = $('#btnHomeBatch');
+    if (batch) batch.onclick = openHomeBatchModal;
     startHomeAutoRefresh();
+    renderHomePickBar();
   }
   function startHomeAutoRefresh() {
     stopHomeAutoRefresh();
@@ -359,12 +374,168 @@
     if (!items.length) { grid.innerHTML = '<div class="empty"><div class="ico">📭</div>该分类暂无内容</div>'; return; }
     grid.innerHTML = items.map((it, i) => {
       const d = it.date ? it.date.slice(5) : '';
-      return `<div class="home-row" data-idx="${i}" title="${esc(it.title)}">
+      const checked = state.homePicked.has(it.url);
+      return `<div class="home-row ${checked ? 'picked' : ''}" data-idx="${i}" title="${esc(it.title)}">
+        <input type="checkbox" class="home-check" data-idx="${i}" ${checked ? 'checked' : ''} aria-label="选择 ${esc(it.title)}">
         ${d ? `<span class="home-date">${esc(d)}</span>` : ''}
         <span class="home-text">${esc(it.title)}</span>
+        <button class="btn sm ghost home-sub-btn" data-home-sub="${i}" title="添加关注">⭐</button>
       </div>`;
     }).join('');
-    $$('.home-row').forEach(el => el.onclick = () => clickHome(+el.dataset.idx));
+    $$('.home-check').forEach(el => el.onclick = e => {
+      e.stopPropagation();
+      toggleHomePick(+el.dataset.idx, el.checked);
+    });
+    $$('[data-home-sub]').forEach(b => b.onclick = async e => {
+      e.stopPropagation();
+      const it = currentHomeItems()[+b.dataset.homeSub];
+      if (!it) return;
+      addFollowDialog({ keyword: it.title, sixv_url: it.url, category: it.category });
+    });
+    $$('.home-row').forEach(el => el.onclick = e => {
+      if (e.target.classList.contains('home-check')) return;
+      clickHome(+el.dataset.idx);
+    });
+    syncHomeSelectAll();
+    renderHomePickBar();
+  }
+  function currentHomeItems() {
+    const cat = state.homeCats.find(c => c.category === state.homeActiveCat);
+    return (cat && cat.items) || [];
+  }
+  function toggleHomePick(i, on) {
+    const it = currentHomeItems()[i];
+    if (!it || !it.url) return;
+    if (on) state.homePicked.set(it.url, { title: it.title, url: it.url, category: it.category });
+    else state.homePicked.delete(it.url);
+    const row = $(`.home-row[data-idx="${i}"]`);
+    if (row) row.classList.toggle('picked', on);
+    syncHomeSelectAll();
+    renderHomePickBar();
+  }
+  function toggleHomeSelectAll(on) {
+    currentHomeItems().forEach(it => {
+      if (!it.url) return;
+      if (on) state.homePicked.set(it.url, { title: it.title, url: it.url, category: it.category });
+      else state.homePicked.delete(it.url);
+    });
+    renderHomeGrid();
+  }
+  function syncHomeSelectAll() {
+    const all = $('#homeSelectAll');
+    if (!all) return;
+    const items = currentHomeItems();
+    all.checked = items.length > 0 && items.every(it => state.homePicked.has(it.url));
+    all.indeterminate = !all.checked && items.some(it => state.homePicked.has(it.url));
+  }
+  function renderHomePickBar() {
+    const n = state.homePicked.size;
+    const btn = $('#btnHomeBatch');
+    if (btn) {
+      btn.disabled = n === 0;
+      btn.textContent = n ? `⬇ 批量下载 (${n})` : '⬇ 批量下载';
+    }
+    const fab = $('#homeFab');
+    if (!fab) return;
+    if (!n) { fab.innerHTML = ''; return; }
+    fab.innerHTML = `<div class="fab"><span>已选 <span class="count">${n}</span> 部</span><button class="btn primary sm" id="btnHomeFabPush">选择磁力并推送 →</button></div>`;
+    const b = $('#btnHomeFabPush');
+    if (b) b.onclick = openHomeBatchModal;
+  }
+  async function fetchMagnetsCached(url) {
+    if (state.magCache.has(url)) return { ok: true, data: state.magCache.get(url) };
+    const res = await api.get('/api/magnets?url=' + encodeURIComponent(url));
+    if (res.ok && Array.isArray(res.data)) state.magCache.set(url, res.data);
+    return res;
+  }
+  async function openHomeBatchModal() {
+    const picked = Array.from(state.homePicked.values());
+    if (!picked.length) { toast('请先勾选要下载的条目', 'error'); return; }
+    const root = $('#modal-root');
+    if (!root) return;
+    root.innerHTML = `
+    <div class="modal-mask" id="homeBatchMask">
+      <div class="modal wide">
+        <div class="modal-head"><h3>选择磁力链（${picked.length} 部）</h3><button class="icon-btn" id="closeHomeBatchX">✕</button></div>
+        <div class="modal-body" id="homeBatchBody"><div class="loading-box"><span class="spinner"></span> 正在拉取磁力链…</div></div>
+        <div class="modal-foot">
+          <label class="auto-refresh"><input type="checkbox" id="homeBatchAll"> 全选磁力</label>
+          <button class="btn" id="cancelHomeBatch">取消</button>
+          <button class="btn primary" id="btnHomeBatchPush" disabled>推送到 2dland</button>
+        </div>
+      </div>
+    </div>`;
+    const close = () => { root.innerHTML = ''; };
+    $('#closeHomeBatchX').onclick = close;
+    $('#cancelHomeBatch').onclick = close;
+    $('#homeBatchMask').onclick = e => { if (e.target.id === 'homeBatchMask') close(); };
+
+    const groups = [];
+    const chunk = 4;
+    for (let i = 0; i < picked.length; i += chunk) {
+      const part = picked.slice(i, i + chunk);
+      const partRes = await Promise.all(part.map(async it => {
+        const { ok, data } = await fetchMagnetsCached(it.url);
+        return { item: it, magnets: ok && Array.isArray(data) ? data : [], error: ok ? '' : ((data && data.error) || '加载失败') };
+      }));
+      groups.push(...partRes);
+      const loaded = groups.length;
+      const body0 = $('#homeBatchBody');
+      if (body0) body0.innerHTML = `<div class="loading-box"><span class="spinner"></span> 正在拉取磁力链… ${loaded}/${picked.length}</div>`;
+    }
+
+    const body = $('#homeBatchBody');
+    if (!body) return;
+    body.innerHTML = groups.map((g, gi) => {
+      const head = `<div class="home-batch-head"><div class="home-batch-title">${esc(g.item.title)}</div><span class="muted text-xs">${esc(catName(g.item.category))}</span></div>`;
+      if (g.error) return `<div class="home-batch-group" data-gi="${gi}">${head}<div class="err-text">${esc(g.error)}</div></div>`;
+      if (!g.magnets.length) return `<div class="home-batch-group" data-gi="${gi}">${head}<div class="muted text-sm">该页未提取到磁力链</div></div>`;
+      const rows = g.magnets.map((m, mi) => `<label class="mag">
+        <input type="checkbox" data-gi="${gi}" data-mi="${mi}">
+        <div class="mag-info">
+          <div class="mag-desc">${esc(m.desc || m.name)}</div>
+          <div class="mag-hash">${esc((m.magnet || '').slice(0, 80))}${(m.magnet || '').length > 80 ? '…' : ''}</div>
+        </div>
+      </label>`).join('');
+      return `<div class="home-batch-group" data-gi="${gi}">${head}${rows}</div>`;
+    }).join('');
+
+    const chosen = new Map();
+    const syncPushBtn = () => {
+      const b = $('#btnHomeBatchPush');
+      if (b) { b.disabled = chosen.size === 0; b.textContent = chosen.size ? `推送到 2dland（${chosen.size}）` : '推送到 2dland'; }
+    };
+    body.querySelectorAll('input[type=checkbox]').forEach(cb => {
+      cb.onchange = () => {
+        const g = groups[+cb.dataset.gi];
+        const m = g && g.magnets[+cb.dataset.mi];
+        if (!m) return;
+        if (cb.checked) chosen.set(m.magnet, { name: m.name || m.desc || g.item.title, magnet: m.magnet, category: g.item.category, title: g.item.title });
+        else chosen.delete(m.magnet);
+        cb.closest('.mag').classList.toggle('checked', cb.checked);
+        syncPushBtn();
+      };
+    });
+    const allMag = $('#homeBatchAll');
+    if (allMag) allMag.onchange = () => {
+      body.querySelectorAll('input[type=checkbox]').forEach(cb => {
+        if (cb.checked === allMag.checked) return;
+        cb.checked = allMag.checked;
+        cb.dispatchEvent(new Event('change'));
+      });
+    };
+    $('#btnHomeBatchPush').onclick = async () => {
+      const items = Array.from(chosen.values());
+      if (!items.length) { toast('请勾选要推送的磁力链', 'error'); return; }
+      const btn = $('#btnHomeBatchPush');
+      btn.disabled = true; btn.textContent = '推送中…';
+      const { ok, data } = await api.post('/api/push', { magnets: items });
+      if (!ok) { toast(data.error || '推送失败', 'error'); btn.disabled = false; syncPushBtn(); return; }
+      close();
+      state.homePicked.clear();
+      renderHomeGrid();
+      showPushResult(data);
+    };
   }
   function clickHome(i) {
     const cat = state.homeCats.find(c => c.category === state.homeActiveCat);
@@ -429,11 +600,16 @@
           ${r.date ? `<span class="tag date">${esc(r.date)}</span>` : ''}
           <span class="tag cat">${esc(catName(r.category))}</span>
           <a class="title" href="${esc(r.url)}" target="_blank">${esc(r.title)}</a>
+          <button class="btn sm ghost" data-sub-result="${i}">⭐ 关注</button>
           <button class="btn sm ghost" data-mag="${i}">查看磁力链 ▾</button>
         </div>
         <div class="result-body" id="mags-${i}"></div>
       </div>`).join('');
     $$('[data-mag]').forEach(b => b.onclick = () => toggleMags(+b.dataset.mag));
+    $$('[data-sub-result]').forEach(b => b.onclick = async () => {
+      const r = state.lastResults[+b.dataset.subResult];
+      addFollowDialog({ keyword: r.title, sixv_url: r.url, category: r.category });
+    });
     // 自动展开来自发现页的卡片磁力链
     if (pending && pending.url) {
       const idx = results.findIndex(r => r.url === pending.url);
@@ -535,7 +711,10 @@
           <input type="checkbox" id="autoRefresh" ${arOn ? 'checked' : ''}> 自动刷新
           <input type="number" id="refreshSec" class="input-num" value="${arSec}" min="3" max="3600"> 秒
         </label>
+        <button class="btn primary" id="btnMoveDone">📦 转移已下载</button>
+        <button class="btn" id="btnBatchOrg" disabled>✨ 批量整理 <span id="orgCount">0</span></button>
         <button class="btn danger" id="btnBatchDel" disabled>🗑 批量删除 <span id="selCount">0</span></button>
+        <button class="btn" id="btnProbeOrg">🔎 探测已整理</button>
         <button class="btn" id="btnRefreshTasks">⟳ 刷新</button>
       </div>
     </div>
@@ -543,7 +722,10 @@
   }
   function bindTasks() {
     $('#btnRefreshTasks').onclick = () => loadTasks();
+    $('#btnMoveDone').onclick = moveDoneTasks;
     $('#btnBatchDel').onclick = batchDelete;
+    $('#btnBatchOrg').onclick = batchOrganize;
+    $('#btnProbeOrg').onclick = probeOrganized;
     const cb = $('#autoRefresh'), sec = $('#refreshSec');
     if (cb) cb.onchange = () => { localStorage.setItem('task_auto_refresh', cb.checked ? '1' : '0'); startTaskAutoRefresh(); };
     if (sec) sec.onchange = () => { const v = Math.max(3, parseInt(sec.value) || 10); sec.value = v; localStorage.setItem('task_refresh_sec', String(v)); startTaskAutoRefresh(); };
@@ -593,11 +775,13 @@
       const sCls = t.status === 1000 ? 'ok' : (t.status === 3 ? 'err' : (t.status === 1 || t.status === 2 ? 'warn' : ''));
       const name = t.name || t.url || '未命名';
       const checked = state.taskSel.has(t.identity) ? 'checked' : '';
-      return `<div class="task">
+      const orgCls = t.organized ? ' organized' : '';
+      return `<div class="task${orgCls}">
         <input type="checkbox" class="t-check t-item" data-id="${esc(t.identity)}" ${checked}>
         <div class="t-name">
-          <div>${esc(name)}</div>
+          <div class="t-title">${esc(name)}</div>
           ${t.save_path ? `<div class="muted text-xs" title="${esc(t.save_path)}">📁 ${esc(t.save_path)}</div>` : ''}
+          ${t.organized ? `<span class="org-tag">已整理</span>` : ''}
         </div>
         <div class="progress"><span style="width:${pct}%"></span></div>
         <div class="pct">${pct}%</div>
@@ -639,6 +823,13 @@
     const btn = $('#btnBatchDel'), cnt = $('#selCount');
     if (btn) btn.disabled = n === 0;
     if (cnt) cnt.textContent = n;
+    const orgN = selectedCompletedTasks().length;
+    const orgBtn = $('#btnBatchOrg'), orgCnt = $('#orgCount');
+    if (orgBtn) orgBtn.disabled = orgN === 0;
+    if (orgCnt) orgCnt.textContent = orgN;
+  }
+  function selectedCompletedTasks() {
+    return (state.taskAll || []).filter(t => state.taskSel.has(t.identity) && t.status === 1000 && t.save_path);
   }
   function syncCheckAll() {
     const ca = $('#checkAll');
@@ -649,12 +840,13 @@
   async function deleteTask(identity, name) {
     const r = await confirmDialog({
       title: '删除任务',
-      message: `确定要删除任务「<b>${esc(name)}</b>」吗？`,
+      message: `确定要删除任务「<b>${esc(name)}</b>」吗？<br><span class="muted text-xs">安全保护已启用：只删除任务记录，下载文件一律保留。</span>`,
+      checkboxLabel: '',
     });
     if (!r.ok) return;
-    const { ok, data } = await api.post('/api/tasks/delete', { identities: [identity], delete_files: r.checked });
+    const { ok, data } = await api.post('/api/tasks/delete', { identities: [identity], delete_files: false });
     if (!ok) { toast(data.error || '删除失败', 'error'); return; }
-    toast(r.checked ? '已删除任务及文件' : '已删除任务', 'success');
+    toast('已删除任务，下载文件已保留', 'success');
     loadTasks();
   }
   // organizeTask 整理已完成任务的下载文件：删除广告 + 规范化视频文件名，结果用弹窗展示。
@@ -670,6 +862,9 @@
     toast('正在整理…', 'info');
     const { ok, data } = await api.post('/api/tasks/organize', { save_path: savePath });
     if (!ok) { toast(data.error || '整理失败', 'error'); return; }
+    const t = (state.taskAll || []).find(tt => tt.save_path === savePath);
+    if (t) t.organized = true;
+    renderTaskPage();
     showOrganizeResult(data, name);
   }
   function showOrganizeResult(res, name) {
@@ -701,21 +896,109 @@
     $('#orgMask').onclick = e => { if (e.target.id === 'orgMask') close(); };
   }
   async function batchDelete() {
-    const ids = Array.from(state.taskSel);
-    if (!ids.length) return;
+    const ids = Array.from(state.taskSel).filter(Boolean);
+    if (!ids.length) { toast('请先勾选要删除的任务', 'error'); return; }
     const r = await confirmDialog({
       title: '批量删除任务',
-      message: `确定要删除选中的 <b>${ids.length}</b> 个任务吗？（跨页选中也会一并删除）`,
+      message: `确定要删除选中的 <b>${ids.length}</b> 个任务吗？（跨页选中也会一并删除）<br><span class="muted text-xs">安全保护已启用：只删除任务记录，下载文件一律保留。</span>`,
+      checkboxLabel: '',
     });
     if (!r.ok) return;
     const btn = $('#btnBatchDel');
-    const old = btn.innerHTML;
-    btn.disabled = true; btn.textContent = '删除中…';
-    const { ok, data } = await api.post('/api/tasks/delete', { identities: ids, delete_files: r.checked });
-    btn.disabled = false; btn.innerHTML = old;
+    const old = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.textContent = '删除中…'; }
+    const { ok, data } = await api.post('/api/tasks/delete', { identities: ids, delete_files: false });
+    if (btn) { btn.disabled = false; btn.innerHTML = old; }
     if (!ok) { toast(data.error || '删除失败', 'error'); return; }
-    toast(`已删除 ${ids.length} 个任务`, 'success');
+    const n = data.deleted != null ? data.deleted : ids.length;
+    const fail = (data.failed || []).length;
+    if (fail) toast(`删掉 ${n} 条，失败 ${fail} 条`, 'error');
+    else toast(`已删除 ${n} 个任务，下载文件已保留`, 'success');
     loadTasks();
+  }
+  async function moveDoneTasks() {
+    // 这里不能排除 organized=true：历史上已经整理/转移过但任务记录未删除的项目，
+    // 也需要通过“转移已下载”清理离线任务记录。按 save_path 去重，避免同一季多集
+    // 共享目录时对同一个目录反复 OrganizeTask，引发 404/竞态。
+    const completedTasks = (state.taskAll || []).filter(t => t.status === 1000 && t.save_path);
+    if (!completedTasks.length) { toast('没有需要转移的已完成任务', 'info'); return; }
+    const seen = new Set();
+    const tasks = completedTasks.filter(t => {
+      if (seen.has(t.save_path)) return false;
+      seen.add(t.save_path);
+      return true;
+    });
+    const r = await confirmDialog({
+      title: '转移已下载',
+      message: `将扫描 <b>${completedTasks.length}</b> 个已完成任务（<b>${tasks.length}</b> 个目录）：有视频的会转移到「已下载」并整理；已转移过的会清理任务记录；空目录/未落盘会自动跳过。`,
+      confirmText: '开始转移',
+      danger: false,
+      checkboxLabel: '',
+    });
+    if (!r.ok) return;
+    const btn = $('#btnMoveDone');
+    const old = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.textContent = '转移中…'; }
+    const items = tasks.map(t => ({ save_path: t.save_path, name: t.name || t.url || '未命名' }));
+    const { ok, data } = await api.post('/api/tasks/organize-batch', { items });
+    if (btn) { btn.disabled = false; btn.innerHTML = old; }
+    if (!ok) { toast(data.error || '转移失败', 'error'); return; }
+    const rows = data.items || [];
+    const movedRows = rows.filter(x => x.ok && x.result && x.result.archive_path);
+    const okN = movedRows.length;
+    const skipN = rows.length - okN;
+
+    // 转移/整理成功后自动删除离线任务，但不删除已经转移到“已下载”的文件。
+    const movedPaths = new Set(movedRows.map(x => x.save_path));
+    const deleteIds = completedTasks.filter(t => movedPaths.has(t.save_path)).map(t => t.identity).filter(Boolean);
+    let delMsg = '';
+    if (deleteIds.length) {
+      const del = await api.post('/api/tasks/delete', { identities: deleteIds, delete_files: false });
+      if (del.ok) delMsg = `，已删除任务 ${deleteIds.length} 个`;
+      else delMsg = `，但删除任务失败：${esc((del.data && del.data.error) || '未知错误')}`;
+    }
+
+    toast(`转移完成：${okN} 个进入已下载，${skipN} 个跳过/无需处理${delMsg}`, okN ? 'success' : 'info');
+    loadTasks();
+  }
+  async function batchOrganize() {
+    const items = selectedCompletedTasks().map(t => ({ save_path: t.save_path, name: t.name || t.url || '未命名' }));
+    if (!items.length) { toast('请勾选已完成且有保存目录的任务', 'error'); return; }
+    const r = await confirmDialog({
+      title: '批量整理',
+      message: `整理选中的 <b>${items.length}</b> 个已完成任务？<br><span class="muted text-xs">删广告 + 规范命名。已整理过的会跳过或重扫。</span>`,
+      confirmText: '开始整理',
+      danger: false,
+      checkboxLabel: '',
+    });
+    if (!r.ok) return;
+    const btn = $('#btnBatchOrg');
+    const old = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.textContent = '整理中…'; }
+    const { ok, data } = await api.post('/api/tasks/organize-batch', { items });
+    if (btn) { btn.disabled = false; btn.innerHTML = old; }
+    if (!ok) { toast(data.error || '批量整理失败', 'error'); return; }
+    const rows = data.items || [];
+    const okN = rows.filter(x => x.ok).length;
+    toast(`整理完成：${okN}/${rows.length} 成功`, okN === rows.length ? 'success' : 'error');
+    rows.forEach(x => {
+      if (x.ok) {
+        const t = (state.taskAll || []).find(tt => tt.save_path === x.save_path);
+        if (t) t.organized = true;
+      }
+    });
+    renderTaskPage();
+  }
+  async function probeOrganized() {
+    const btn = $('#btnProbeOrg');
+    if (btn) { btn.disabled = true; btn.textContent = '探测中…'; }
+    const { ok, data } = await api.post('/api/tasks/probe', {});
+    if (btn) { btn.disabled = false; btn.textContent = '🔎 探测已整理'; }
+    if (!ok) { toast(data.error || '探测失败', 'error'); return; }
+    state.taskAll = data || [];
+    const n = state.taskAll.filter(t => t.organized).length;
+    toast(n ? `探测到 ${n} 个已整理` : '没有探测到已整理项目', n ? 'success' : 'info');
+    renderTaskPage();
   }
   // confirmDialog 通用确认弹窗，返回 { ok, checked }。
   function confirmDialog({ title, message, confirmText = '删除', danger = true, checkboxLabel = '同时删除已下载的文件' }) {
@@ -743,6 +1026,200 @@
     });
   }
 
+  // ============ 视图：关注 ============
+  function viewFollows() {
+    return `
+    <div class="page-head">
+      <div><h2>关注</h2><div class="desc">点开关注即可看到 6v 上的全部磁力链接，勾选后批量推送到 2dland 离线下载</div></div>
+      <div class="row gap-sm">
+        <button class="btn ghost" id="btnRefreshAllFollows" title="逐条刷新全部关注的链接名称">⟳ 全部刷新</button>
+        <button class="btn primary" id="btnAddFollow">＋ 添加关注</button>
+      </div>
+    </div>
+    <div id="followsList"><div class="card"><span class="spinner"></span> 加载中…</div></div>`;
+  }
+  function bindFollows() {
+    $('#btnAddFollow').onclick = () => addFollowDialog();
+    $('#btnRefreshAllFollows').onclick = refreshAllFollowNames;
+  }
+  // refreshAllFollowNames 逐条刷新全部关注的链接名称，带进度反馈。
+  async function refreshAllFollowNames() {
+    const btn = $('#btnRefreshAllFollows');
+    if (!btn || btn.disabled) return;
+    const { ok, data } = await api.get('/api/follows');
+    if (!ok) { toast(data.error || '加载关注失败', 'error'); return; }
+    const items = data.follows || [];
+    if (!items.length) { toast('暂无关注可刷新', 'error'); return; }
+    btn.disabled = true;
+    let done = 0, failed = 0;
+    for (const f of items) {
+      btn.textContent = `⟳ 刷新中 ${done + failed + 1}/${items.length}`;
+      try {
+        const r = await api.post('/api/follows/rename', { id: f.id });
+        if (r.ok) done++; else failed++;
+      } catch { failed++; }
+    }
+    btn.disabled = false;
+    btn.textContent = '⟳ 全部刷新';
+    toast(`全部刷新完成：成功 ${done}${failed ? `，失败 ${failed}` : ''}`, failed ? 'error' : 'success');
+    loadFollows();
+  }
+  // addFollowDialog 添加/预填关注弹窗；prefill: {keyword, sixv_url, category}
+  function addFollowDialog(prefill) {
+    const p = prefill || {};
+    const root = $('#modal-root');
+    const cats = [['dlz','国剧'],['rj','日韩剧'],['mj','欧美剧'],['zydy','动漫'],['zy','综艺'],['dy','电影'],['gydy','国语电影'],['jddy','动画电影'],['3D','3D电影']];
+    root.innerHTML = `
+    <div class="modal-mask" id="followMask">
+      <div class="modal wide">
+        <div class="modal-head"><h3>添加关注</h3><button class="icon-btn" id="followX">✕</button></div>
+        <div class="modal-body">
+          <div class="field"><label>6v 详情链接（推荐：点开关注直接显示该页全部磁力）</label><input id="followURL" class="input" value="${esc(p.sixv_url || '')}" placeholder="如：https://www.6v520.com/zydy/2026-09-15/12345.html"></div>
+          <div class="field-row">
+            <div class="field"><label>名称 / 关键词（链接失效时搜索用）</label><input id="followKeyword" class="input" value="${esc(p.keyword || '')}" placeholder="如：凡人修仙传"></div>
+            <div class="field"><label>分类</label><select id="followCategory" class="input">${cats.map(c => `<option value="${c[0]}" ${p.category === c[0] ? 'selected' : ''}>${c[1]}</option>`).join('')}</select></div>
+          </div>
+        </div>
+        <div class="modal-foot"><button class="btn" id="followCancel">取消</button><button class="btn primary" id="followSave">添加关注</button></div>
+      </div>
+    </div>`;
+    const close = () => { root.innerHTML = ''; };
+    $('#followX').onclick = close;
+    $('#followCancel').onclick = close;
+    $('#followMask').onclick = e => { if (e.target.id === 'followMask') close(); };
+    $('#followSave').onclick = async () => {
+      const keyword = $('#followKeyword').value.trim();
+      const sixv_url = $('#followURL').value.trim();
+      if (!keyword && !sixv_url) { toast('请填写名称或 6v 链接', 'warn'); return; }
+      const body = { keyword: keyword || sixv_url, title: keyword || sixv_url, category: $('#followCategory').value, sixv_url };
+      const { ok, data } = await api.post('/api/follows', body);
+      if (!ok) { toast(data.error || '添加失败', 'error'); return; }
+      close();
+      toast('关注已添加', 'success');
+      if (state.view === 'follows') loadFollows();
+    };
+    $('#followKeyword').focus();
+  }
+  async function loadFollows() {
+    const { ok, data } = await api.get('/api/follows');
+    if (!ok) { $('#followsList').innerHTML = `<div class="empty">${esc(data.error || '加载失败')}</div>`; return; }
+    renderFollows(data.items || []);
+  }
+  function renderFollows(items) {
+    const box = $('#followsList'); if (!box) return;
+    if (!items.length) { box.innerHTML = '<div class="empty"><div class="ico">⭐</div>暂无关注。可在发现/搜索页点「⭐」按钮添加，或点右上角「＋ 添加关注」。</div>'; return; }
+    box.innerHTML = items.map(f => {
+      const name = f.title || '';
+      const keyword = f.keyword || '';
+      const shortName = name.length > 42 ? name.slice(0, 42) + '…' : name;
+      return `
+      <div class="card follow-card" data-fid="${esc(f.id)}">
+        <div class="row between">
+          <div style="min-width:0;">
+            <h3 style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(name || keyword)}">${esc(shortName || '<span class="muted">（未抓取名称，点「刷新名称」获取）</span>')}</h3>
+            <div class="muted text-sm">关键字：${esc(keyword || '—')} · ${esc(catName(f.category))} · ${f.sixv_url ? '固定链接' : '关键词搜索'} · 添加于 ${esc(String(f.created_at || '').slice(0, 10))}</div>
+          </div>
+          <div class="row gap-sm">
+            <button class="btn sm primary" data-follow-open="${esc(f.id)}">🧲 查看磁力</button>
+            <button class="btn sm ghost" data-follow-rename="${esc(f.id)}" title="重新抓取 6v 页面标题">⟳ 刷新名称</button>
+            <button class="btn sm ghost" data-follow-del="${esc(f.id)}">删除</button>
+          </div>
+        </div>
+      </div>`;
+    }).join('');
+    $$('[data-follow-del]').forEach(b => b.onclick = async () => {
+      if (!confirm('删除这条关注？')) return;
+      const { ok, data } = await api.post('/api/follows/delete', { id: b.dataset.followDel });
+      if (!ok) { toast(data.error || '删除失败', 'error'); return; }
+      toast('已删除', 'success');
+      loadFollows();
+    });
+    $$('[data-follow-rename]').forEach(b => b.onclick = async () => {
+      b.disabled = true; b.textContent = '⟳ 抓取中…';
+      const { ok, data } = await api.post('/api/follows/rename', { id: b.dataset.followRename });
+      if (!ok) { toast(data.error || '刷新失败', 'error'); b.disabled = false; b.textContent = '⟳ 刷新名称'; return; }
+      toast('名称已更新：' + (data.title || '').slice(0, 40), 'success');
+      loadFollows();
+    });
+    $$('[data-follow-open]').forEach(b => b.onclick = () => openFollowMagnets(b.dataset.followOpen, items));
+  }
+  // openFollowMagnets 弹窗查看某条关注的全部磁力链（优先固定 6v 链接，否则关键词搜索第一条）。
+  // 弹窗内勾选，底部直接推送；关闭后可立刻点开下一条关注，无需来回翻页。
+  async function openFollowMagnets(id, items) {
+    const f = items.find(x => x.id === id); if (!f) return;
+    const root = $('#modal-root'); if (!root) return;
+    const title = f.title || f.keyword || '关注';
+    root.innerHTML = `
+    <div class="modal-mask" id="fmMask">
+      <div class="modal wide">
+        <div class="modal-head"><h3>🧲 ${esc(title)} <span class="muted text-sm">· ${esc(catName(f.category))}</span></h3><button class="icon-btn" id="fmX">✕</button></div>
+        <div class="modal-body" id="fmBody"><div class="muted text-sm"><span class="spinner"></span> 正在抓取全部磁力链…</div></div>
+        <div class="modal-foot">
+          <label class="auto-refresh" style="margin-right:auto;"><input type="checkbox" id="fmAll"> 全选</label>
+          <button class="btn" id="fmCancel">关闭</button>
+          <button class="btn primary" id="fmPush" disabled>推送到 2dland</button>
+        </div>
+      </div>
+    </div>`;
+    const body = $('#fmBody');
+    const close = () => { root.innerHTML = ''; };
+    $('#fmX').onclick = close;
+    $('#fmCancel').onclick = close;
+    $('#fmMask').onclick = e => { if (e.target.id === 'fmMask') close(); };
+
+    let url = f.sixv_url;
+    if (!url) {
+      const s = await api.get('/api/search?q=' + encodeURIComponent(f.keyword || f.title || ''));
+      if (s.ok && Array.isArray(s.data) && s.data.length) url = s.data[0].url;
+    }
+    if (!url) { body.innerHTML = '<div class="err-text">未找到资源链接，请删除后重新添加并填写 6v 链接</div>'; return; }
+    const res = await api.get('/api/magnets?url=' + encodeURIComponent(url));
+    if (!res.ok || !Array.isArray(res.data) || !res.data.length) {
+      body.innerHTML = `<div class="err-text">${esc((res.data && res.data.error) || '该页未提取到磁力链')}</div>`;
+      return;
+    }
+    const magnets = res.data;
+    body.innerHTML = `<div class="muted text-sm mb-8">共 ${magnets.length} 条磁力</div>` + magnets.map((m, idx) => `<label class="mag">
+        <input type="checkbox" data-fmidx="${idx}">
+        <div class="mag-info">
+          <div class="mag-desc">${esc(m.desc || m.name)}</div>
+          <div class="mag-hash">${esc((m.magnet || '').slice(0, 80))}…</div>
+        </div>
+      </label>`).join('');
+
+    const chosen = new Map();
+    const syncPush = () => {
+      const b = $('#fmPush');
+      if (b) { b.disabled = chosen.size === 0; b.textContent = chosen.size ? `推送到 2dland（${chosen.size}）` : '推送到 2dland'; }
+    };
+    body.querySelectorAll('input[type=checkbox][data-fmidx]').forEach(cb => {
+      cb.onchange = () => {
+        const m = magnets[+cb.dataset.fmidx];
+        if (!m) return;
+        if (cb.checked) chosen.set(m.magnet, { name: m.name || m.desc || f.title, magnet: m.magnet, category: f.category, title: f.title });
+        else chosen.delete(m.magnet);
+        cb.closest('.mag').classList.toggle('checked', cb.checked);
+        syncPush();
+      };
+    });
+    const all = $('#fmAll');
+    if (all) all.onchange = () => {
+      body.querySelectorAll('input[type=checkbox][data-fmidx]').forEach(cb => {
+        if (cb.checked !== all.checked) { cb.checked = all.checked; cb.dispatchEvent(new Event('change')); }
+      });
+    };
+    $('#fmPush').onclick = async () => {
+      const list = Array.from(chosen.values());
+      if (!list.length) { toast('请勾选要推送的磁力链', 'error'); return; }
+      const btn = $('#fmPush');
+      btn.disabled = true; btn.textContent = '推送中…';
+      const { ok, data } = await api.post('/api/push', { magnets: list });
+      if (!ok) { toast(data.error || '推送失败', 'error'); btn.disabled = false; syncPush(); return; }
+      showPushResult(data);
+      chosen.clear();
+    };
+  }
+
   // ============ 视图：文件管理 ============
   function viewFiles() {
     return `
@@ -750,6 +1227,7 @@
       <div><h2>文件管理</h2><div class="desc">直接管理 2dland 网盘文件，可拖拽文件到文件夹移动</div></div>
       <div class="row gap-sm">
         <button class="btn" id="btnNewFolder">📁 新建文件夹</button>
+        <button class="btn" id="btnFileOrganize" disabled>✨ 批量整理 <span id="fileOrgCount"></span></button>
         <button class="btn danger" id="btnFileDel" disabled>🗑 删除选中 <span id="fileSelCount"></span></button>
         <button class="btn" id="btnRefreshFiles">⟳ 刷新</button>
       </div>
@@ -763,6 +1241,7 @@
   function bindFiles() {
     $('#btnRefreshFiles').onclick = loadFiles;
     $('#btnNewFolder').onclick = newFolder;
+    $('#btnFileOrganize').onclick = organizeSelectedFolders;
     $('#btnFileDel').onclick = deleteFiles;
   }
   async function loadFiles() {
@@ -809,7 +1288,7 @@
     box.innerHTML = items.map(f => {
       const icon = f.dir ? '📁' : iconForFile(f.name);
       const meta = f.dir ? `${f.dirs} 文件夹 · ${f.files} 文件` : formatSize(f.size);
-      const date = f.update_ts ? new Date(f.update_ts * 1000).toLocaleDateString('zh-CN') : '';
+      const date = formatFileDate(f.update_ts);
       const checked = state.fileSel.has(f.identity) ? 'checked' : '';
       return `<div class="fitem ${f.dir ? 'is-dir drop-target' : ''}" draggable="true" data-id="${esc(f.identity)}" data-name="${esc(f.name)}" data-path="${esc(f.path)}" data-dir="${f.dir}">
         <input type="checkbox" class="f-check" data-id="${esc(f.identity)}" ${checked}>
@@ -854,11 +1333,41 @@
     });
     $$('.f-rename').forEach(b => b.onclick = e => { e.stopPropagation(); renameFile(b.dataset.id, b.dataset.name); });
   }
+  function selectedFileDirs() {
+    return (state.fileItems || []).filter(f => f.dir && state.fileSel.has(f.identity));
+  }
   function updateFileSelUI() {
     const n = state.fileSel.size;
     const btn = $('#btnFileDel'), cnt = $('#fileSelCount');
     if (btn) btn.disabled = n === 0;
     if (cnt) cnt.textContent = n > 0 ? `(${n})` : '';
+    const dirs = selectedFileDirs().length;
+    const orgBtn = $('#btnFileOrganize'), orgCnt = $('#fileOrgCount');
+    if (orgBtn) orgBtn.disabled = dirs === 0;
+    if (orgCnt) orgCnt.textContent = dirs > 0 ? `(${dirs})` : '';
+  }
+  async function organizeSelectedFolders() {
+    const dirs = selectedFileDirs();
+    if (!dirs.length) { toast('请先勾选要整理的文件夹', 'error'); return; }
+    const r = await confirmDialog({
+      title: '批量整理文件夹',
+      message: `整理选中的 <b>${dirs.length}</b> 个文件夹？<br><span class="muted text-xs">会按文件夹路径执行：转移到已下载（如尚未在已下载中）、删除广告/杂项、移动视频到项目根、规范化文件名。</span>`,
+      confirmText: '开始整理',
+      danger: false,
+      checkboxLabel: '',
+    });
+    if (!r.ok) return;
+    const btn = $('#btnFileOrganize');
+    const old = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.textContent = '整理中…'; }
+    const items = dirs.map(f => ({ save_path: f.path, name: f.name }));
+    const { ok, data } = await api.post('/api/tasks/organize-batch', { items });
+    if (btn) { btn.disabled = false; btn.innerHTML = old; }
+    if (!ok) { toast(data.error || '批量整理失败', 'error'); return; }
+    const rows = data.items || [];
+    const okN = rows.filter(x => x.ok).length;
+    toast(`整理完成：${okN}/${rows.length} 成功`, okN === rows.length ? 'success' : 'error');
+    loadFiles();
   }
   async function newFolder() {
     const name = await promptDialog({ title: '新建文件夹', placeholder: '输入文件夹名' });
@@ -881,7 +1390,7 @@
     if (!ids.length) return;
     const r = await confirmDialog({
       title: '删除文件',
-      message: `确定要删除选中的 <b>${ids.length}</b> 项吗？（移到回收站，可在 2dland 恢复）`,
+      message: `确定要删除选中的 <b>${ids.length}</b> 项吗？（移到回收站，可在 2dland 恢复）<br><span class="muted text-xs">安全保护：已下载媒体库中的内容无法在本应用删除。</span>`,
       checkboxLabel: '',
     });
     if (!r.ok) return;
@@ -901,6 +1410,13 @@
     if (!ok) { toast(data.error || '移动失败', 'error'); return; }
     toast(`已移动 ${ids.length} 项`, 'success');
     loadFiles();
+  }
+  function formatFileDate(ts) {
+    const n = Number(ts);
+    if (!Number.isFinite(n) || n <= 0) return '';
+    const ms = n < 100000000000 ? n * 1000 : n;
+    const d = new Date(ms);
+    return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('zh-CN');
   }
   function formatSize(b) {
     if (!b) return '-';
@@ -1021,9 +1537,16 @@
       <div class="login-card">
         <div class="row between">
           <span class="pill ok"><span class="dot"></span>2dland 已登录</span>
-          <button class="btn sm danger" id="btn2dlandLogout">退出 2dland 登录</button>
+          <div class="row">
+            <button class="btn sm" id="btnClearRateLimit">清除推送限流</button>
+            <button class="btn sm danger" id="btn2dlandLogout">退出 2dland 登录</button>
+          </div>
         </div>
       </div>`;
+      $('#btnClearRateLimit').onclick = async () => {
+        const {ok,data} = await api.post('/api/drive/clear-rate-limit',{});
+        toast(ok?'限流状态已清除':(data.error||'清除失败'), ok?'success':'error');
+      };
       $('#btn2dlandLogout').onclick = async () => {
         const { ok, data } = await api.post('/api/auth/logout');
         if (!ok) { toast(data.error || '退出失败', 'error'); return; }

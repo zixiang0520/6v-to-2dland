@@ -1,6 +1,7 @@
 package drive
 
 import (
+	"net/http"
 	"sync"
 	"time"
 
@@ -17,31 +18,55 @@ const apiHost = "openapi.2dland.cn"
 
 // Client 封装 2dland SDK 客户端与各业务服务。
 type Client struct {
-	mu       sync.RWMutex
-	api      *apiclient.Client
-	store    config.ConfigStore
-	oauth    *oauth.OAuthService
-	offline  *offline.OfflineTaskService
-	userfile *userfile.UserFileService
-	tmdb     *tmdb.Client
-	baseDir  string
-	clientID string
+	mu           sync.RWMutex
+	api          *apiclient.Client
+	store        config.ConfigStore
+	oauth        *oauth.OAuthService
+	offline      *offline.OfflineTaskService
+	userfile     *userfile.UserFileService
+	tmdb         *tmdb.Client
+	baseDir      string
+	organizedDir string
+	clientID     string
+	cookie       string
+	http         *http.Client
+	tokFile      string
 
 	deviceCode  string
 	loginExpire time.Time
+	rateLimited bool // 2dland 返回 429 后置 true，阻止后续推送直到冷却
+	rateLimitUntil time.Time
 }
 
 // snapshot 是一次请求期间的一致性快照（指针副本，开销极小）。
 // 所有公共方法入口取快照，Update* 方法加写锁替换字段，避免数据竞争。
 type snapshot struct {
-	api      *apiclient.Client
-	oauth    *oauth.OAuthService
-	offline  *offline.OfflineTaskService
-	userfile *userfile.UserFileService
-	tmdb     *tmdb.Client
-	store    config.ConfigStore
-	baseDir  string
-	clientID string
+	api          *apiclient.Client
+	oauth        *oauth.OAuthService
+	offline      *offline.OfflineTaskService
+	userfile     *userfile.UserFileService
+	tmdb         *tmdb.Client
+	store        config.ConfigStore
+	baseDir      string
+	organizedDir string
+	clientID     string
+	cookie       string
+	http         *http.Client
+	tokFile      string
+}
+
+// IsRateLimited 返回当前是否被 2dland 限流。
+func (c *Client) IsRateLimited() bool {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.rateLimited && time.Now().Before(c.rateLimitUntil)
+}
+
+// ClearRateLimit 手动清除限流状态（用于手动重试）。
+func (c *Client) ClearRateLimit() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.rateLimited = false
 }
 
 func (c *Client) snap() snapshot {
@@ -49,7 +74,8 @@ func (c *Client) snap() snapshot {
 	defer c.mu.RUnlock()
 	return snapshot{
 		api: c.api, oauth: c.oauth, offline: c.offline, userfile: c.userfile,
-		tmdb: c.tmdb, store: c.store, baseDir: c.baseDir, clientID: c.clientID,
+		tmdb: c.tmdb, store: c.store, baseDir: c.baseDir, organizedDir: c.organizedDir, clientID: c.clientID,
+		cookie: c.cookie, http: c.http, tokFile: c.tokFile,
 	}
 }
 
@@ -60,13 +86,16 @@ func New(c *cfg.Config) *Client {
 		apiclient.WithTimeout(30*time.Second),
 	)
 	cl := &Client{
-		api:      api,
-		store:    store,
-		oauth:    oauth.NewOAuthService(api),
-		offline:  offline.NewOfflineTaskService(api),
-		userfile: userfile.NewUserFileService(api),
-		baseDir:  c.BaseDir,
-		clientID: c.ClientID,
+		api:          api,
+		store:        store,
+		oauth:        oauth.NewOAuthService(api),
+		offline:      offline.NewOfflineTaskService(api),
+		userfile:     userfile.NewUserFileService(api),
+		baseDir:      c.BaseDir,
+		organizedDir: c.OrganizedDir,
+		clientID:     c.ClientID,
+		http:         &http.Client{Timeout: 30 * time.Second},
+		tokFile:      c.TokenFile,
 	}
 	if c.TmdbAPIKey != "" {
 		cl.tmdb = tmdb.New(c.TmdbAPIKey, c.TmdbProxy, c.TmdbLang)
@@ -87,10 +116,18 @@ func (c *Client) UpdateTMDB(apiKey, proxy, lang string) {
 
 // UpdateBaseDir 热更新 2dland 根目录名。
 func (c *Client) UpdateBaseDir(baseDir string) {
+	c.UpdateDirs(baseDir, "")
+}
+
+// UpdateDirs 热更新下载根目录和整理归档目录名。
+func (c *Client) UpdateDirs(baseDir, organizedDir string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if baseDir != "" {
 		c.baseDir = baseDir
+	}
+	if organizedDir != "" {
+		c.organizedDir = organizedDir
 	}
 }
 

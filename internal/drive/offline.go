@@ -6,6 +6,8 @@ import (
 	"log"
 	"regexp"
 	"strconv"
+	"strings"
+	"time"
 
 	"6v-to-2dland/internal/tmdb"
 
@@ -15,10 +17,12 @@ import (
 
 // PushItem 是待推送的一条磁力链及其所属资源信息。
 type PushItem struct {
-	Name     string `json:"name"`     // 磁力链描述
-	Magnet   string `json:"magnet"`   // 磁力链
-	Category string `json:"category"` // 6v 分类目录名
-	Title    string `json:"title"`    // 资源标题（用于 TMDB 规范化）
+	Name         string `json:"name"`                    // 磁力链描述
+	Magnet       string `json:"magnet"`                  // 磁力链
+	Category     string `json:"category"`                // 6v 分类目录名
+	Title        string `json:"title"`                   // 资源标题（用于 TMDB 规范化）
+	Season       int    `json:"season,omitempty"`        // 显式指定季数（0 = 从磁力文本自动解析）
+	DownloadDate string `json:"download_date,omitempty"` // 订阅推送日期 YYYY-MM-DD；空 = 普通手动推送目录
 }
 
 // PushResultItem 是单条磁力链推送的结果。
@@ -41,6 +45,10 @@ type PushResult struct {
 
 // Push 按磁力链所属资源建立 分类/标题/[季] 目录并添加离线任务。
 func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error) {
+	// 如果当前处于 2dland 限流冷却期，直接拒绝推送，避免反复触发风控。
+	if c.IsRateLimited() {
+		return &PushResult{}, fmt.Errorf("2dland 当前处于限流冷却期，请稍后再试（或手动清除限流状态）")
+	}
 	s := c.snap()
 	res := &PushResult{}
 	cache := map[string]string{} // key -> savePath，避免重复建目录
@@ -54,16 +62,28 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 
 		seasonName := ""
 		key := it.Category + "|" + titleName
-		if isTVCategory(it.Category) {
-			n := seasonFromMagnet(it.Magnet, it.Name)
+		if isTVCategory(it.Category) || it.DownloadDate != "" {
+			n := it.Season
+			if n <= 0 {
+				n = seasonFromMagnet(it.Magnet, it.Name)
+			}
 			seasonName = "第" + strconv.Itoa(n) + "季"
 			ri.Season = seasonName
 			key += "|" + seasonName
 		}
+		if it.DownloadDate != "" {
+			key += "|" + it.DownloadDate
+		}
 
 		savePath, cached := cache[key]
 		if !cached {
-			sp, err := ensureFolderByCategory(ctx, s, it.Category, titleName, seasonName)
+			var sp string
+			var err error
+			if it.DownloadDate != "" {
+				sp, err = ensureSubscriptionFolder(ctx, s, it.Category, titleName, seasonName, it.DownloadDate)
+			} else {
+				sp, err = ensureFolderByCategory(ctx, s, it.Category, titleName, seasonName)
+			}
 			if err != nil {
 				ri.Error = "创建文件夹失败: " + err.Error()
 				cache[key] = ""
@@ -83,14 +103,40 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 		ri.SavePath = savePath
 		log.Printf("Push[%d]: savePath=%q cached=%v", i, savePath, cached)
 
-		task, err := s.offline.Add(ctx, &offline.UserTask{
-			Url:      it.Magnet,
-			Name:     it.Name,
-			SavePath: savePath,
-		})
-		if err != nil {
-			ri.Error = err.Error()
-			log.Printf("Push[%d]: offline.Add failed: %v", i, err)
+		// 2dland 对连续添加任务限流（HTTP 429）。这里带间隔提交 + 限流自动重试，
+		// 避免一批任务因限流整批失败；失败的条目不会被标记已推送，下次检查会重试。
+		var task *offline.UserTask
+		var addErr error
+		for attempt := 1; attempt <= 3; attempt++ {
+			task, addErr = s.offline.Add(ctx, &offline.UserTask{
+				Url:      it.Magnet,
+				Name:     it.Name,
+				SavePath: savePath,
+			})
+			if addErr == nil {
+				break
+			}
+			if isRateLimited(addErr) && attempt < 3 {
+				wait := time.Duration(attempt*30) * time.Second
+				log.Printf("Push[%d]: rate limited, retry %d/3 after %v", i, attempt+1, wait)
+				select {
+				case <-ctx.Done():
+				case <-time.After(wait):
+				}
+				continue
+			}
+			break
+		}
+		if addErr != nil {
+			ri.Error = addErr.Error()
+			log.Printf("Push[%d]: offline.Add failed: %v", i, addErr)
+			// 连续 2 个任务被限流 → 停止本轮推送，避免反复触发风控加重限制。
+			if isRateLimited(addErr) {
+				c.mu.Lock()
+				c.rateLimited = true
+				c.rateLimitUntil = time.Now().Add(30 * time.Minute)
+				c.mu.Unlock()
+			}
 		} else {
 			ri.OK = true
 			ri.Identity = task.Identity
@@ -99,8 +145,23 @@ func (c *Client) Push(ctx context.Context, items []PushItem) (*PushResult, error
 			c.startWatcher(task.Identity, savePath)
 		}
 		res.Items = append(res.Items, ri)
+		if i < len(items)-1 {
+			select {
+			case <-ctx.Done():
+			case <-time.After(1500 * time.Millisecond):
+			}
+		}
 	}
 	return res, nil
+}
+
+// isRateLimited 判断 2dland 是否返回限流错误（HTTP 429 / USER_OPERATE_TOO_FREQUENTLY）。
+func isRateLimited(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := err.Error()
+	return strings.Contains(msg, "429") || strings.Contains(msg, "TOO_FREQUENTLY")
 }
 
 var titleRe = regexp.MustCompile(`(?:([0-9]{4}))?[^\d《]*《([^》]+)》`)
@@ -143,10 +204,10 @@ func normalizeFolderName(ctx context.Context, t *tmdb.Client, title, category st
 
 // ListTasks 列出全部离线下载任务。
 // 2dland 用游标分页（ListInfo.Token），这里循环拉取每页 50 条直到 token 为空。
-func (c *Client) ListTasks(ctx context.Context) ([]*offline.UserTask, error) {
+func (c *Client) ListTasks(ctx context.Context) ([]*UserTask, error) {
 	s := c.snap()
 	const pageSize = 50
-	var all []*offline.UserTask
+	var all []*UserTask
 	var token string
 	for page := 0; ; page++ {
 		resp, err := s.offline.List(ctx, &offline.OfflineTaskListRequest{
@@ -159,7 +220,21 @@ func (c *Client) ListTasks(ctx context.Context) ([]*offline.UserTask, error) {
 			log.Printf("ListTasks: page %d error: %v (returning %d tasks so far)", page, err, len(all))
 			break
 		}
-		all = append(all, resp.Tasks...)
+		for _, t := range resp.Tasks {
+			if t == nil {
+				continue
+			}
+			all = append(all, &UserTask{
+				Identity:       t.Identity,
+				Name:           t.Name,
+				Url:            t.Url,
+				SavePath:       t.SavePath,
+				Status:         t.Status,
+				Progress:       float64(t.Progress),
+				BytesTotal:     t.BytesTotal,
+				BytesProcessed: t.BytesProcessed,
+			})
+		}
 		if resp.ListInfo == nil || resp.ListInfo.Token == "" || len(resp.Tasks) == 0 {
 			break
 		}
@@ -169,6 +244,7 @@ func (c *Client) ListTasks(ctx context.Context) ([]*offline.UserTask, error) {
 			break
 		}
 	}
+	c.ProbeTasks(ctx, all)
 	log.Printf("ListTasks: total %d tasks", len(all))
 	return all, nil
 }
