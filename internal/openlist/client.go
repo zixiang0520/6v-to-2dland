@@ -28,10 +28,10 @@ type Client struct {
 // New 创建客户端。base 形如 http://nas.zx.al:5244。
 func New(base, user, pass string) *Client {
 	return &Client{
-		Base:  strings.TrimRight(base, "/"),
-		User:  user,
-		Pass:  pass,
-		http:  &http.Client{Timeout: 20 * time.Second},
+		Base: strings.TrimRight(base, "/"),
+		User: user,
+		Pass: pass,
+		http: &http.Client{Timeout: 20 * time.Second},
 	}
 }
 
@@ -66,7 +66,9 @@ func (c *Client) post(ctx context.Context, path string, body any, auth bool) (js
 		c.mu.Lock()
 		tok := c.token
 		c.mu.Unlock()
-		if tok != "" { req.Header.Set("Authorization", tok) }
+		if tok != "" {
+			req.Header.Set("Authorization", tok)
+		}
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
@@ -120,7 +122,9 @@ func (c *Client) Ping(ctx context.Context) error {
 
 // ListDir 列出目录内容。path 为 OpenList 上的绝对路径。
 func (c *Client) ListDir(ctx context.Context, path string) ([]Entry, error) {
-	if _, err := c.Token(ctx); err != nil { return nil, err }
+	if _, err := c.Token(ctx); err != nil {
+		return nil, err
+	}
 	data, err := c.post(ctx, "/api/fs/list", map[string]any{
 		"path":     path,
 		"password": "",

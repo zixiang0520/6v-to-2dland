@@ -629,14 +629,14 @@ func (s *Server) home(w http.ResponseWriter, r *http.Request) {
 // ---------- 关注功能 ----------
 
 type Follow struct {
-	ID         string    `json:"id"`
-	Title      string    `json:"title"`
-	Keyword    string    `json:"keyword"`
-	Category   string    `json:"category"`
-	SixvURL    string    `json:"sixv_url"`
-	CreatedAt  string    `json:"created_at"`
-	UpdatedAt  string    `json:"updated_at"`
-	Magnets    []Magnet  `json:"magnets"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Keyword   string   `json:"keyword"`
+	Category  string   `json:"category"`
+	SixvURL   string   `json:"sixv_url"`
+	CreatedAt string   `json:"created_at"`
+	UpdatedAt string   `json:"updated_at"`
+	Magnets   []Magnet `json:"magnets"`
 }
 type Magnet struct {
 	Name   string `json:"name"`
@@ -769,14 +769,14 @@ func (s *Server) followsAdd(w http.ResponseWriter, r *http.Request) {
 	}
 	now := time.Now().Format(time.RFC3339)
 	f := &Follow{
-		ID:         "follow_" + hex.EncodeToString(randomBytes(4)),
-		Title:      body.Title,
-		Keyword:    body.Keyword,
-		Category:   body.Category,
-		SixvURL:    body.SixvURL,
-		CreatedAt:  now,
-		UpdatedAt:  now,
-		Magnets:    []Magnet{},
+		ID:        "follow_" + hex.EncodeToString(randomBytes(4)),
+		Title:     body.Title,
+		Keyword:   body.Keyword,
+		Category:  body.Category,
+		SixvURL:   body.SixvURL,
+		CreatedAt: now,
+		UpdatedAt: now,
+		Magnets:   []Magnet{},
 	}
 	if !_followStore.Add(f) {
 		writeJSON(w, http.StatusConflict, errStr("该关注已存在"))

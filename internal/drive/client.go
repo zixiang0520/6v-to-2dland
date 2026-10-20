@@ -32,9 +32,9 @@ type Client struct {
 	http         *http.Client
 	tokFile      string
 
-	deviceCode  string
-	loginExpire time.Time
-	rateLimited bool // 2dland 返回 429 后置 true，阻止后续推送直到冷却
+	deviceCode     string
+	loginExpire    time.Time
+	rateLimited    bool // 2dland 返回 429 后置 true，阻止后续推送直到冷却
 	rateLimitUntil time.Time
 }
 
