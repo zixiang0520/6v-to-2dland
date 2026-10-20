@@ -125,7 +125,7 @@ mkdir -p ./data && cd ./data    # config.json / token.json 都以相对路径解
 
 ## 🧰 从源码构建
 
-**依赖**：Go 1.25+
+**依赖**：Go 1.26+
 
 ```bash
 # 直接运行
@@ -160,10 +160,20 @@ go test ./...
 | `POST` | `/api/auth/poll` | 轮询 2dland 授权结果 |
 | `POST` | `/api/auth/logout` | 2dland 登出 |
 | `GET` | `/api/search?q=` | 搜索 6v520 资源 |
+| `GET` | `/api/home?days=10` | 发现页数据（最新页整页全抓 + 11 分类近 N 日，5 分钟缓存） |
 | `GET` | `/api/magnets?url=` | 抓取详情页磁力链 |
 | `POST` | `/api/push` | 推送磁力链到 2dland 离线下载 |
 | `GET` | `/api/tasks` | 列出 2dland 离线任务 |
 | `POST` | `/api/tasks/delete` | 删除单个任务（同步 2dland，body: `{identity, delete_files}`） |
+| `POST` | `/api/tasks/organize` | 整理任务下载文件到标题目录（body: `{save_path}`） |
+| `GET` | `/api/files?path=/` | 浏览 2dland 网盘目录（省略 `path` 即根目录） |
+| `POST` | `/api/files/mkdir` | 新建目录（body: `{parent, name}`） |
+| `POST` | `/api/files/rename` | 重命名（body: `{identity, name}`） |
+| `POST` | `/api/files/move` | 移动文件/目录，供拖拽用（body: `{identities, dest}`） |
+| `POST` | `/api/files/delete` | 删除文件/目录（body: `{identities}`） |
+| `GET` | `/api/files/trash` | 列出 2dland 回收站 |
+| `POST` | `/api/files/recover` | 从回收站恢复（body: `{identities}`） |
+| `GET` | `/api/files/recent` | 最近更新的文件（全局，用于排查丢失文件） |
 | `GET` | `/api/settings` | 读取设置 |
 | `POST` | `/api/settings` | 保存设置（热更新） |
 | `POST` | `/api/settings/test` | TMDB 连接测试 |
@@ -180,6 +190,7 @@ go test ./...
 │   ├── site6v/                  # 6v520 爬虫（GBK 站内搜索 + 详情页磁力链）
 │   │   ├── client.go            #   HTTP 客户端（cookie jar 共享频控 cookie）
 │   │   ├── list.go              #   站内搜索 /e/search/index.php + 列表 fallback
+│   │   ├── home.go              #   发现页抓取（整页全抓 + 分类近 N 日 + 内存缓存）
 │   │   ├── detail.go            #   详情页磁力链提取（goquery）
 │   │   └── types.go             #   Resource / Magnet
 │   ├── tmdb/client.go           # TMDB 客户端（走代理，失败回退原标题）
@@ -188,15 +199,19 @@ go test ./...
 │   │   ├── auth.go              #   OAuth 设备码登录
 │   │   ├── folder.go            #   三级目录创建（normalizePath 防御非完整路径）
 │   │   ├── offline.go           #   离线下载推送 / 任务列表 / 删除
+│   │   ├── watcher.go           #   任务完成轮询 → 触发自动整理
+│   │   ├── organize.go          #   下载完成整理（按集数搬进标题目录）
+│   │   ├── files.go             #   网盘文件管理（列表/新建/重命名/移动/删除/回收站/恢复）
 │   │   └── season.go            #   季数解析正则
 │   └── server/                  # HTTP 服务
 │       ├── server.go            #   路由 + 鉴权中间件 + 会话
 │       └── handlers.go           #   各接口 handler
+├── cmd/movetest/main.go         # Move 稳定性测试工具（防丢文件）
 ├── web/                         # 前端（多页 SPA：hash 路由 search/tasks/settings）
 │   ├── index.html
 │   ├── style.css                #   暗色模式 + CSS 变量
 │   └── app.js                   #   交互逻辑
-├── Dockerfile                   # 多阶段构建（golang:1.25-alpine → alpine:3.20）
+├── Dockerfile                   # 多阶段构建（golang:1.26-alpine → alpine:3.24）
 ├── docker-compose.yml           # 一键部署
 ├── .github/workflows/
 │   ├── ci.yml                   # Go test/build + Docker 冒烟测试 + artifact
@@ -211,7 +226,7 @@ go test ./...
 
 | 层 | 技术 |
 |----|------|
-| 后端 | Go 1.25、`net/http`（Go 1.22+ 路由模式）、`embed` |
+| 后端 | Go 1.26、`net/http`（Go 1.22+ 路由模式）、`embed` |
 | 2dland SDK | [halalcloud/golang-sdk-lite](https://github.com/halalcloud/golang-sdk-lite)（HMAC-SHA256 签名 + OAuth 设备码） |
 | 爬虫 | [PuerkitoBio/goquery](https://github.com/PuerkitoBio/goquery)、`golang.org/x/text`（GBK 解码） |
 | TMDB | [TMDB API v3](https://developer.themoviedb.org/docs)（可选，走代理） |

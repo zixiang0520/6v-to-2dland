@@ -16,7 +16,7 @@ type Config struct {
 	ClientSecret   string `json:"client_secret"`   // 2dland 开放平台 client_secret
 	AccessPassword string `json:"access_password"` // 访问 UI 的密码，留空表示未启用（首次进入走设置向导）
 	TokenFile      string `json:"token_file"`      // token 持久化文件，默认 token.json
-	SiteBase       string `json:"site_base"`       // 6v520 站点根，默认 http://www.6v520.com
+	SiteBase       string `json:"site_base"`       // 6v520 站点根，默认 https://www.6v520.com
 
 	TmdbAPIKey string `json:"tmdb_api_key"`  // TMDB API Key，留空则不规范化
 	TmdbProxy  string `json:"tmdb_proxy"`    // 访问 TMDB 的代理，如 http://127.0.0.1:7890

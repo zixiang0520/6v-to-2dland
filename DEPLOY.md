@@ -4,7 +4,7 @@
 
 ## 1. 镜像特点
 
-- **多阶段构建**：builder 用 `golang:1.25-alpine` 编译，runtime 用 `alpine:3.20`，最终镜像约 20MB。
+- **多阶段构建**：builder 用 `golang:1.26-alpine` 编译，runtime 用 `alpine:3.24`，最终镜像约 20MB。
 - **静态二进制**：`CGO_ENABLED=0`，无动态库依赖。
 - **CA 证书 + tzdata**：容器内访问 TMDB / 2dland 的 HTTPS 接口必需。
 - **配置与 token 外挂**：`config.json`、`token.json` 均以相对路径解析到工作目录 `/app/data`，挂载宿主目录即可完成注入与持久化，镜像本身不含任何密钥。
@@ -29,7 +29,7 @@ vi /opt/6v/config.json
   "client_id": "你的 2dland client_id",
   "client_secret": "你的 2dland client_secret",
   "token_file": "token.json",
-  "site_base": "http://www.6v520.com",
+  "site_base": "https://www.6v520.com",
   "tmdb_api_key": "你的 TMDB API Key（留空则不规范化标题）",
   "tmdb_proxy": "",
   "tmdb_language": "zh-CN"
