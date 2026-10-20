@@ -3,7 +3,7 @@
 # ============================================================================
 # Builder —— 编译静态 Linux 二进制（前端资源经 go:embed 内嵌）
 # ============================================================================
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 WORKDIR /src
 
@@ -24,7 +24,7 @@ RUN go build -trimpath -ldflags="-s -w" -o /out/6v-to-2dland .
 # ============================================================================
 # Runtime —— 极简镜像 + CA 证书（访问 TMDB/2dland HTTPS 必需）
 # ============================================================================
-FROM alpine:3.20
+FROM alpine:3.24
 
 RUN apk add --no-cache ca-certificates tzdata && \
     update-ca-certificates
