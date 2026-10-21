@@ -264,6 +264,7 @@ func (s *Server) taskOrganizeBatch(w http.ResponseWriter, r *http.Request) {
 		Result   *drive.OrganizeResult `json:"result,omitempty"`
 	}
 	out := make([]itemOut, 0, len(body.Items))
+	okN := 0
 	for _, it := range body.Items {
 		row := itemOut{Name: it.Name, SavePath: it.SavePath}
 		if it.SavePath == "" {
@@ -278,10 +279,14 @@ func (s *Server) taskOrganizeBatch(w http.ResponseWriter, r *http.Request) {
 			row.Error = err.Error()
 		} else {
 			row.OK = true
+			okN++
 			row.Result = res
 		}
+		// 每项都留一条整理记录（含失败），便于回溯原标题。
+		_organizeLogs.Add(newOrganizeLog("batch", it.Name, it.SavePath, res, err))
 		out = append(out, row)
 	}
+	log.Printf("AUDIT: organizeBatch items=%d ok=%d remote=%s", len(out), okN, r.RemoteAddr)
 	writeJSON(w, http.StatusOK, map[string]any{"items": out})
 }
 
@@ -299,10 +304,12 @@ func (s *Server) taskProbe(w http.ResponseWriter, r *http.Request) {
 }
 
 // taskOrganize 整理一个已完成任务下载的文件：删除广告文件 + 规范化视频文件名。
-// 请求体 { save_path } 为任务保存目录，前端任务列表已持有该字段。
+// 请求体 { save_path } 为任务保存目录，前端任务列表已持有该字段；name（任务名）可选，
+// 只用于整理记录里保留「原来的题目」。
 func (s *Server) taskOrganize(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		SavePath string `json:"save_path"`
+		Name     string `json:"name"`
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errResp(err))
@@ -315,6 +322,8 @@ func (s *Server) taskOrganize(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 60*time.Second)
 	defer cancel()
 	res, err := s.drive.OrganizeTask(ctx, body.SavePath)
+	// 无论成功失败都留一条整理记录：整理错了要能回溯原标题/原文件名。
+	_organizeLogs.Add(newOrganizeLog("manual", body.Name, body.SavePath, res, err))
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, errResp(err))
 		return

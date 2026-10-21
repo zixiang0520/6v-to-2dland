@@ -20,6 +20,7 @@
 - 🌐 **2dland 设备码登录**：UI 内完成 OAuth 设备码授权，token 持久化到挂载目录，容器重启免重新授权。
 - 📋 **任务管理**：查看 2dland 离线下载队列与进度，单条任务可🗑删除（调 2dland API 同步，可选同时删文件）；支持**批量整理**（勾选多条一次整理）与🔎**探测已整理**（标出哪些任务已归档）。
 - 🤖 **自动整理**：任务下载完成后自动清理广告文件并把视频按集数搬进标题目录（后台轮询触发，无需手动点）。
+- 📝 **整理记录**：自动/手动/批量整理都会留痕（持久化到 `organize_logs.json`，最近 500 条）：任务名（BT 原始名）、整理前路径、解析出的标题目录，以及**逐条「原文件名 → 新文件名」映射**——整理错了也能查回原来的题目叫什么；支持关键词筛选、单条删除与一键清空。
 - 🏠 **发现页**：首页推荐 + 11 个分类「近 N 日」（默认 10 天），整页全抓 + 后端内存缓存；支持勾选多条**批量下载**。
 - 🗂️ **网盘文件管理**：浏览 2dland 目录、新建/重命名/移动（拖拽）/删除，查看回收站与恢复，以及全局「最近文件」排查丢失文件。
 - ⭐ **关注**：把感兴趣的资源加为关注（持久化到 `follows.json`，容器重启不丢），一键重抓 6v 页面标题刷新名称。
@@ -47,6 +48,8 @@
 ```
 
 **数据流**：浏览器 → 本工具后端 → 6v520 搜索/抓详情页 → 前端展示磁力链 → 用户勾选 → 后端调 TMDB 规范化标题 → 在 2dland 建三级目录 → 调 2dland 离线下载接口把磁力链下到该目录。
+
+**整理留痕**：任务下载完成后由 watcher 轮询触发自动整理（删广告 + 按集数规范命名 + 归档到「已下载」）。每次整理——无论自动、任务页手动 ✨ 还是批量/转移已下载——都会追加一条整理记录：触发方式、任务名（BT 原始名）、整理前路径、解析出的标题目录与季数、逐条「原文件名 → 新文件名」映射、删除与跳过清单，失败时连错误一起记。整理把文件改名后原始信息就只剩这条记录，所以「📝 整理记录」页可以按任务名/原标题/文件名/路径直接筛出对应的那一次整理。记录落在 `organize_logs.json`，最多保留 500 条。
 
 ---
 
@@ -125,7 +128,7 @@ mkdir -p ./data && cd ./data    # config.json / token.json 都以相对路径解
 | `tmdb_proxy` | — | 访问 TMDB 的代理，如 `http://127.0.0.1:7890`（国内通常需要） |
 | `tmdb_language` | `zh-CN` | TMDB 返回语言 |
 
-> 配置含敏感信息，`config.json` 以 `0600` 权限原子写入；`.gitignore` 已排除 `config.json` / `token.json`。
+> 配置含敏感信息，`config.json` 以 `0600` 权限原子写入；`.gitignore` 已排除 `config.json` / `token.json` / `follows.json` / `organize_logs.json`。运行时数据（`token.json`、`follows.json`、`organize_logs.json`）都与 `token_file` 同目录，挂载住该目录即容器重启不丢。
 
 ---
 
@@ -171,10 +174,13 @@ go test ./...
 | `POST` | `/api/push` | 推送磁力链到 2dland 离线下载 |
 | `GET` | `/api/tasks` | 列出 2dland 离线任务 |
 | `POST` | `/api/tasks/delete` | 删除单个任务（同步 2dland，body: `{identity, delete_files}`） |
-| `POST` | `/api/tasks/organize` | 整理任务下载文件到标题目录（body: `{save_path}`） |
+| `POST` | `/api/tasks/organize` | 整理任务下载文件到标题目录（body: `{save_path, name?}`，`name` 为任务名，仅用于整理记录回溯） |
 | `POST` | `/api/tasks/organize-batch` | 批量整理（body: `{items:[{save_path, name}]}`，返回逐条 ok/error） |
 | `POST` | `/api/tasks/probe` | 探测全部任务是否已整理，返回带 `organized` 标记的任务列表 |
 | `POST` | `/api/drive/clear-rate-limit` | 清除 2dland 限流冷却状态（429 被拒后可手动重试） |
+| `GET` | `/api/organize-logs?limit=200` | 整理记录（最新在前，持久化在 `organize_logs.json`，最多保留 500 条） |
+| `POST` | `/api/organize-logs/delete` | 删除整理记录（body: `{ids:[...]}` 或 `{id}`） |
+| `POST` | `/api/organize-logs/clear` | 清空全部整理记录（只删记录，不动网盘文件） |
 | `GET` | `/api/files?path=/` | 浏览 2dland 网盘目录（省略 `path` 即根目录） |
 | `POST` | `/api/files/mkdir` | 新建目录（body: `{parent, name}`） |
 | `POST` | `/api/files/rename` | 重命名（body: `{identity, name}`） |
@@ -212,7 +218,7 @@ go test ./...
 │   │   ├── auth.go              #   OAuth 设备码登录
 │   │   ├── folder.go            #   三级目录创建（normalizePath 防御非完整路径）
 │   │   ├── offline.go           #   离线下载推送 / 任务列表 / 删除
-│   │   ├── watcher.go           #   任务完成轮询 → 触发自动整理
+│   │   ├── watcher.go           #   任务完成轮询 → 触发自动整理（并回调整理结果）
 │   │   ├── organize.go          #   下载完成整理（按集数搬进标题目录）
 │   │   ├── files.go             #   网盘文件管理（列表/新建/重命名/移动/删除/回收站/恢复）
 │   │   └── season.go            #   季数解析正则
@@ -221,8 +227,9 @@ go test ./...
 │   └── server/                  # HTTP 服务
 │       ├── server.go            #   路由 + 鉴权中间件 + 会话
 │       ├── handlers.go          #   各接口 handler
+│       ├── organize_log.go      #   整理记录存储（organize_logs.json）+ 接口
 │       └── clear_rate_limit.go  #   清除 2dland 频控限流状态
-├── web/                         # 前端（hash 路由 SPA：home/search/follows/tasks/files/settings）
+├── web/                         # 前端（hash 路由 SPA：home/search/tasks/organize-logs/follows/files/settings）
 │   ├── index.html
 │   ├── style.css                #   暗色模式 + CSS 变量
 │   └── app.js                   #   交互逻辑

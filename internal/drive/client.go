@@ -36,6 +36,11 @@ type Client struct {
 	loginExpire    time.Time
 	rateLimited    bool // 2dland 返回 429 后置 true，阻止后续推送直到冷却
 	rateLimitUntil time.Time
+
+	// OnOrganize 自动整理（watcher）完成时回调，含失败；上层用它持久化整理记录。
+	// 只覆盖自动整理路径；手动/批量整理由 server handler 直接记录，不走此回调。
+	// 在 server.New 里设置一次，之后只读。
+	OnOrganize func(OrganizeNotice)
 }
 
 // snapshot 是一次请求期间的一致性快照（指针副本，开销极小）。

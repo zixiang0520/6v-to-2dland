@@ -31,12 +31,20 @@ type Server struct {
 
 // New 创建 Server。cfgPath 用于设置变更时回写 config.json。
 func New(c *cfg.Config, cfgPath string, webFS embed.FS) *Server {
+	dataDir := filepath.Dir(c.TokenFile)
 	// 关注持久化：follows.json 与 token.json 同目录（data 挂载卷），容器重启不丢。
-	_followStore = newFollowStore(filepath.Join(filepath.Dir(c.TokenFile), "follows.json"))
+	_followStore = newFollowStore(filepath.Join(dataDir, "follows.json"))
+	// 整理记录持久化：organize_logs.json 与 token.json 同目录，容器重启不丢。
+	_organizeLogs = newOrganizeLogStore(filepath.Join(dataDir, "organize_logs.json"))
+	dc := drive.New(c)
+	// 自动整理（watcher）完成后落一条整理记录；手动/批量整理由 handler 直接记录。
+	dc.OnOrganize = func(n drive.OrganizeNotice) {
+		_organizeLogs.Add(newOrganizeLog(n.Trigger, n.TaskName, n.SavePath, n.Result, n.Error))
+	}
 	return &Server{
 		cfg:     c,
 		cfgPath: cfgPath,
-		drive:   drive.New(c),
+		drive:   dc,
 		site:    site6v.NewClient(c.SiteBase),
 		webFS:   webFS,
 	}
@@ -132,6 +140,10 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/tasks/organize-batch", s.requireAuth(s.taskOrganizeBatch))
 	mux.HandleFunc("POST /api/tasks/probe", s.requireAuth(s.taskProbe))
 	mux.HandleFunc("POST /api/drive/clear-rate-limit", s.requireAuth(s.clearRateLimit))
+	// 整理记录（每次整理的原标题/重命名映射留痕）
+	mux.HandleFunc("GET /api/organize-logs", s.requireAuth(s.organizeLogsList))
+	mux.HandleFunc("POST /api/organize-logs/delete", s.requireAuth(s.organizeLogsDelete))
+	mux.HandleFunc("POST /api/organize-logs/clear", s.requireAuth(s.organizeLogsClear))
 	// 文件管理（直接管理 2dland 网盘）
 	mux.HandleFunc("GET /api/files", s.requireAuth(s.filesList))
 	mux.HandleFunc("POST /api/files/mkdir", s.requireAuth(s.filesMkdir))

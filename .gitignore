@@ -5,10 +5,15 @@
 6v-to-2dland.exe
 /dist/
 
-# 运行时生成的本地数据（含密钥，禁止提交）
+# 运行时生成的本地数据（含密钥/私人路径，禁止提交）
 config.json
 token.json
 *.token.json
+follows.json
+organize_logs.json
+
+# 会话内 TODO 笔记（不提交）
+*_TODO.md
 
 # 测试 / 探针临时文件
 *.out

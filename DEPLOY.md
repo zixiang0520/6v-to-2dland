@@ -115,7 +115,7 @@ docker run -d ... 6v-to-2dland:latest   # 参数同上
 docker compose up -d --build
 ```
 
-`config.json` 与 `token.json` 在挂载目录内，升级不丢。
+`config.json` 与 `token.json` 在挂载目录内，升级不丢。同目录还会生成 `follows.json`（关注）与 `organize_logs.json`（整理记录，最近 500 条），一并随挂载目录持久化。
 
 ## 8. 关于 TMDB 代理
 

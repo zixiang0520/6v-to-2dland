@@ -71,6 +71,9 @@
     pollTimer: null,
     taskRefreshTimer: null,  // 任务页自动刷新定时器
     homeRefreshTimer: null,  // 发现页自动刷新定时器
+    orgLogs: [],           // 整理记录（最新在前）
+    orgLogsTotal: 0,       // 服务端总条数
+    orgLogsFilter: '',     // 整理记录筛选词
   };
 
   // ============ 主题 ============
@@ -119,7 +122,7 @@
 
   function onHash() {
     const h = location.hash.slice(1);
-    state.view = ['home', 'search', 'tasks', 'follows', 'files', 'settings'].includes(h) ? h : 'home';
+    state.view = ['home', 'search', 'tasks', 'organize-logs', 'follows', 'files', 'settings'].includes(h) ? h : 'home';
     render();
   }
 
@@ -148,6 +151,7 @@
       if (state.homeCats.length) { renderHomeTabs(); renderHomeGrid(); }
     }
     else if (state.view === 'tasks') { c.innerHTML = viewTasks(); bindTasks(); loadTasks(); }
+    else if (state.view === 'organize-logs') { c.innerHTML = viewOrganizeLogs(); bindOrganizeLogs(); loadOrganizeLogs(); }
     else if (state.view === 'follows') { c.innerHTML = viewFollows(); bindFollows(); loadFollows(); }
     else if (state.view === 'files') { c.innerHTML = viewFiles(); bindFiles(); loadFiles(); }
     else if (state.view === 'settings') { c.innerHTML = viewSettingsLoading(); loadSettings(); }
@@ -257,6 +261,7 @@
           <a class="nav-item ${state.view === 'home' ? 'active' : ''}" href="#home">🏠 发现</a>
           <a class="nav-item ${state.view === 'search' ? 'active' : ''}" href="#search">🔍 搜索</a>
           <a class="nav-item ${state.view === 'tasks' ? 'active' : ''}" href="#tasks">📋 任务</a>
+          <a class="nav-item ${state.view === 'organize-logs' ? 'active' : ''}" href="#organize-logs">📝 整理记录</a>
           <a class="nav-item ${state.view === 'follows' ? 'active' : ''}" href="#follows">⭐ 关注</a>
           <a class="nav-item ${state.view === 'files' ? 'active' : ''}" href="#files">📂 文件</a>
           <a class="nav-item ${state.view === 'settings' ? 'active' : ''}" href="#settings">⚙ 设置</a>
@@ -272,6 +277,7 @@
         <a class="m-nav-item ${state.view === 'home' ? 'active' : ''}" href="#home"><span class="m-ico">🏠</span><span class="m-lbl">发现</span></a>
         <a class="m-nav-item ${state.view === 'search' ? 'active' : ''}" href="#search"><span class="m-ico">🔍</span><span class="m-lbl">搜索</span></a>
         <a class="m-nav-item ${state.view === 'tasks' ? 'active' : ''}" href="#tasks"><span class="m-ico">📋</span><span class="m-lbl">任务</span></a>
+        <a class="m-nav-item ${state.view === 'organize-logs' ? 'active' : ''}" href="#organize-logs"><span class="m-ico">📝</span><span class="m-lbl">整理记录</span></a>
         <a class="m-nav-item ${state.view === 'follows' ? 'active' : ''}" href="#follows"><span class="m-ico">⭐</span><span class="m-lbl">关注</span></a>
         <a class="m-nav-item ${state.view === 'files' ? 'active' : ''}" href="#files"><span class="m-ico">📂</span><span class="m-lbl">文件</span></a>
         <a class="m-nav-item ${state.view === 'settings' ? 'active' : ''}" href="#settings"><span class="m-ico">⚙</span><span class="m-lbl">设置</span></a>
@@ -860,7 +866,8 @@
     });
     if (!r.ok) return;
     toast('正在整理…', 'info');
-    const { ok, data } = await api.post('/api/tasks/organize', { save_path: savePath });
+    // 带上任务名：整理记录里要保留「原来的题目」。
+    const { ok, data } = await api.post('/api/tasks/organize', { save_path: savePath, name: name || '' });
     if (!ok) { toast(data.error || '整理失败', 'error'); return; }
     const t = (state.taskAll || []).find(tt => tt.save_path === savePath);
     if (t) t.organized = true;
@@ -880,6 +887,7 @@
         <div class="modal-body">
           <div class="text-sm mb-8">任务：<b>${esc(name)}</b></div>
           <div class="text-xs muted mb-8">📁 ${esc(res.save_path || '')}</div>
+          <div class="text-xs muted mb-8">🧾 已记入「📝 整理记录」：任务名、整理前路径与逐条改名都在那里，可随时回溯原名</div>
           ${empty}
           ${del ? `<div class="mt-8 text-sm"><b>删除广告/杂项（${res.deleted.length}）</b></div><ul class="org-list">${del}</ul>` : ''}
           ${rn ? `<div class="mt-8 text-sm"><b>重命名视频（${res.renamed.length}）</b></div><ul class="org-list">${rn}</ul>` : ''}
@@ -1024,6 +1032,138 @@
       $('#confirmX').onclick = () => close({ ok: false });
       $('#confirmMask').onclick = e => { if (e.target.id === 'confirmMask') close({ ok: false }); };
     });
+  }
+
+  // ============ 视图：整理记录 ============
+  // 每次整理（自动/手动/批量）都留一条记录，用于回溯「原来的题目」：
+  // 任务名（BT 原始名）、整理前的原始路径、解析出的标题目录，以及逐条重命名映射。
+  function triggerInfo(t) {
+    if (t === 'auto') return { label: '自动', cls: 'auto' };
+    if (t === 'manual') return { label: '手动', cls: 'manual' };
+    if (t === 'batch') return { label: '批量', cls: 'batch' };
+    return { label: t || '未知', cls: '' };
+  }
+  function fmtLogTime(s) {
+    if (!s) return '';
+    const d = new Date(s);
+    if (isNaN(d.getTime())) return s;
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+  }
+  function viewOrganizeLogs() {
+    return `
+    <div class="page-head">
+      <div><h2>整理记录</h2><div class="desc">每次整理都留痕（任务名 / 原始路径 / 重命名映射）：整理错了也能查回原来的题目是什么</div></div>
+      <div class="row">
+        <button class="btn sm" id="orgLogRefresh">⟳ 刷新</button>
+        <button class="btn sm danger" id="orgLogClear">🗑 清空记录</button>
+      </div>
+    </div>
+    <div class="toolbar">
+      <input class="input orglog-filter" id="orgLogFilter" placeholder="筛选：任务名 / 原标题 / 文件名 / 路径">
+      <span class="muted text-xs" id="orgLogStat">加载中…</span>
+    </div>
+    <div class="orglog-list" id="orgLogList"></div>`;
+  }
+  function bindOrganizeLogs() {
+    $('#orgLogRefresh').onclick = loadOrganizeLogs;
+    $('#orgLogClear').onclick = async () => {
+      const r = await confirmDialog({
+        title: '清空整理记录',
+        message: '确定清空全部整理记录吗？<br><span class="muted text-xs">只删记录，不会动网盘文件，也不会动下载任务。</span>',
+        confirmText: '清空',
+        checkboxLabel: '',
+      });
+      if (!r.ok) return;
+      const { ok, data } = await api.post('/api/organize-logs/clear', {});
+      if (!ok) { toast(data.error || '清空失败', 'error'); return; }
+      state.orgLogs = []; state.orgLogsTotal = 0;
+      renderOrganizeLogs();
+      toast(`已清空 ${data.cleared || 0} 条整理记录`, 'success');
+    };
+    const f = $('#orgLogFilter');
+    f.value = state.orgLogsFilter || '';
+    f.oninput = () => { state.orgLogsFilter = f.value.trim(); renderOrganizeLogs(); };
+  }
+  async function loadOrganizeLogs() {
+    const { ok, data } = await api.get('/api/organize-logs?limit=500');
+    if (!ok) { toast(data.error || '加载整理记录失败', 'error'); return; }
+    state.orgLogs = data.items || [];
+    state.orgLogsTotal = data.total || state.orgLogs.length;
+    renderOrganizeLogs();
+  }
+  // orgLogText 把一条记录拍平成可搜索的文本（含重命名前后的文件名）。
+  function orgLogText(r) {
+    const parts = [r.task_name, r.save_path, r.archive_path, r.title_dir, r.category, r.error];
+    (r.renamed || []).forEach(x => { parts.push(x.old); parts.push(x.new); });
+    (r.deleted || []).forEach(x => parts.push(x));
+    (r.skipped || []).forEach(x => parts.push(x));
+    return parts.filter(Boolean).join(' ').toLowerCase();
+  }
+  function renderOrganizeLogs() {
+    const box = $('#orgLogList');
+    if (!box) return;
+    const all = state.orgLogs || [];
+    const q = (state.orgLogsFilter || '').toLowerCase();
+    const rows = q ? all.filter(r => orgLogText(r).includes(q)) : all;
+    const stat = $('#orgLogStat');
+    if (stat) stat.textContent = all.length
+      ? `显示 ${rows.length} / 已加载 ${all.length} 条（服务端共 ${state.orgLogsTotal} 条，最多保留 500 条）`
+      : '暂无整理记录';
+    if (!rows.length) {
+      box.innerHTML = `<div class="card"><div class="muted text-sm">${all.length
+        ? '没有匹配的记录，换个关键词试试（可搜任务名、原标题、原文件名、路径）'
+        : '还没有整理记录。添加下载任务后自动整理、或在任务页点 ✨ 手动整理，这里就会出现记录。'}</div></div>`;
+      return;
+    }
+    box.innerHTML = rows.map(orgLogCard).join('');
+    $$('.orglog-del').forEach(b => b.onclick = () => deleteOrganizeLog(b.dataset.id));
+  }
+  function orgLogCard(r) {
+    const tg = triggerInfo(r.trigger);
+    const status = r.ok ? '<span class="tag ok">成功</span>' : '<span class="tag err">失败</span>';
+    const rn = r.renamed || [], del = r.deleted || [], sk = r.skipped || [];
+    const rnHtml = rn.length ? `
+      <div class="orglog-sec">重命名视频（原文件名 → 新文件名）</div>
+      <ul class="org-list">${rn.slice(0, 60).map(x => `<li>✏️ <s>${esc(x.old)}</s> → <b>${esc(x.new)}</b></li>`).join('')}${rn.length > 60 ? `<li class="muted">…还有 ${rn.length - 60} 条（完整内容见服务端 organize_logs.json）</li>` : ''}</ul>` : '';
+    const delHtml = del.length ? `
+      <details class="orglog-more"><summary>🗑 删除广告/杂项（${del.length}）</summary>
+        <ul class="org-list">${del.map(n => `<li>🗑 ${esc(n)}</li>`).join('')}</ul>
+      </details>` : '';
+    const skHtml = sk.length ? `
+      <details class="orglog-more"><summary>⏭️ 跳过（${sk.length}）</summary>
+        <div class="muted text-xs">剧集文件解析不到集数、或重命名失败时会跳过并保留原名</div>
+        <ul class="org-list">${sk.map(n => `<li>⏭️ ${esc(n)}</li>`).join('')}</ul>
+      </details>` : '';
+    return `
+    <div class="card orglog-card">
+      <div class="orglog-head">
+        <div class="row">
+          <span class="tag t-${tg.cls}">${tg.label}</span>
+          ${status}
+          <b class="orglog-name">${esc(r.task_name || '(任务名未知)')}</b>
+        </div>
+        <div class="row">
+          <span class="muted text-xs">${esc(fmtLogTime(r.time))}</span>
+          <button class="icon-btn orglog-del" data-id="${esc(r.id)}" title="删除这条记录">🗑</button>
+        </div>
+      </div>
+      ${r.error ? `<div class="orglog-err">⚠️ ${esc(r.error)}</div>` : ''}
+      <div class="orglog-kv"><span class="k">原标题目录</span><span class="v">${esc(r.title_dir || '(未解析到)')}${r.is_tv && r.season ? ` · 第${r.season}季` : ''}${r.category ? ` · ${esc(catName(r.category))}` : ''}</span></div>
+      <div class="orglog-kv"><span class="k">整理前路径</span><span class="v">${esc(r.save_path || '')}</span></div>
+      ${r.archive_path ? `<div class="orglog-kv"><span class="k">归档后路径</span><span class="v">${esc(r.archive_path)}</span></div>` : ''}
+      <div class="orglog-counts">重命名 ${rn.length} · 删除 ${del.length} · 跳过 ${sk.length}</div>
+      ${rnHtml}${delHtml}${skHtml}
+    </div>`;
+  }
+  async function deleteOrganizeLog(id) {
+    if (!id) return;
+    const { ok, data } = await api.post('/api/organize-logs/delete', { ids: [id] });
+    if (!ok) { toast(data.error || '删除失败', 'error'); return; }
+    state.orgLogs = (state.orgLogs || []).filter(r => r.id !== id);
+    state.orgLogsTotal = Math.max(0, (state.orgLogsTotal || 1) - 1);
+    renderOrganizeLogs();
+    toast('已删除该条记录', 'success');
   }
 
   // ============ 视图：关注 ============

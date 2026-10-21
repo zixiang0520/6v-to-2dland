@@ -43,15 +43,16 @@ var yearSuffixRe = regexp.MustCompile(`\s*\(\d{4}\)\s*$`)
 
 // OrganizeResult 是整理单个任务下载文件的结果。
 type OrganizeResult struct {
-	SavePath    string         `json:"save_path"`    // 整理的目录
-	Category    string         `json:"category"`     // 6v 分类 code（dy/rj/mj/...）
-	IsTV        bool           `json:"is_tv"`        // 是否剧集类
-	TitleDir    string         `json:"title_dir"`    // 标题目录名（如「灵魂伴侣 (2026)」）
-	Season      int            `json:"season"`       // 季数（剧集）
-	ArchivePath string         `json:"archive_path"` // 下载完成后移动到的已下载目录
-	Deleted     []string       `json:"deleted"`      // 被删除的广告/杂项文件名
-	Renamed     []RenameRecord `json:"renamed"`      // 重命名记录
-	Skipped     []string       `json:"skipped"`      // 跳过的视频文件（无法解析集数等）
+	SavePath         string         `json:"save_path"`          // 整理后的目录（归档后可能已变化）
+	OriginalSavePath string         `json:"original_save_path"` // 调用时传入的原始保存目录（整理前的位置，回溯用）
+	Category         string         `json:"category"`           // 6v 分类 code（dy/rj/mj/...）
+	IsTV             bool           `json:"is_tv"`              // 是否剧集类
+	TitleDir         string         `json:"title_dir"`          // 标题目录名（如「灵魂伴侣 (2026)」）
+	Season           int            `json:"season"`             // 季数（剧集）
+	ArchivePath      string         `json:"archive_path"`       // 下载完成后移动到的已下载目录
+	Deleted          []string       `json:"deleted"`            // 被删除的广告/杂项文件名
+	Renamed          []RenameRecord `json:"renamed"`            // 重命名记录
+	Skipped          []string       `json:"skipped"`            // 跳过的视频文件（无法解析集数等）
 }
 
 // RenameRecord 记录一次重命名。
@@ -78,7 +79,7 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 		savePath = "/"
 	}
 	originalSavePath := savePath
-	res := &OrganizeResult{SavePath: savePath}
+	res := &OrganizeResult{SavePath: savePath, OriginalSavePath: originalSavePath}
 
 	// 从 savePath 反推分类 code、标题目录、季数；兼容 /6v下载/已下载/<分类>/<标题> 归档路径。
 	parts := c.logicalSaveParts(savePath)
