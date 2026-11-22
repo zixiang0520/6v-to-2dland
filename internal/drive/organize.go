@@ -52,6 +52,7 @@ type OrganizeResult struct {
 	ArchivePath      string         `json:"archive_path"`       // 下载完成后移动到的已下载目录
 	Deleted          []string       `json:"deleted"`            // 被删除的广告/杂项文件名
 	Renamed          []RenameRecord `json:"renamed"`            // 重命名记录
+	SplitDirs        []string       `json:"split_dirs"`         // 电影按片名拆分出的新目录（系列合集/多部混装）
 	Skipped          []string       `json:"skipped"`            // 跳过的视频文件（无法解析集数等）
 }
 
@@ -265,14 +266,18 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 	}
 
 	// 重命名视频文件
-	// 电影：标题 (年份).ext （同一部多盘加序号 -2/-3）
 	// 剧集：纯标题S01E05.ext（纯标题 = 去掉「 (年份)」后的标题目录名）
-	movieIdx := 0
+	// 电影：按文件名解析每部片名，系列合集/多部混装各自建目录（organizeMovies）。
 	pureTitle := stripYear(res.TitleDir) // 剧集用的纯标题
-	for _, v := range videos {
-		ext := path.Ext(v.Name)
-		var newName string
-		if res.IsTV {
+	if !res.IsTV && res.TitleDir == "" {
+		for _, v := range videos {
+			res.Skipped = append(res.Skipped, v.Name)
+		}
+	} else if !res.IsTV {
+		res.SplitDirs = c.organizeMovies(ctx, savePath, res, videos, res.TitleDir)
+	} else {
+		for _, v := range videos {
+			ext := path.Ext(v.Name)
 			ep := parseEpisode(v.Name)
 			if ep == 0 {
 				// 剧集解析不到集数，跳过不重命名（避免误改名）
@@ -283,34 +288,24 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 			if s := parseSeasonFromName(v.Name); s > 0 {
 				season = s
 			}
+			var newName string
 			if pureTitle == "" {
 				// 没有标题目录名兜底用纯季集格式
 				newName = fmt.Sprintf("S%02dE%02d%s", season, ep, ext)
 			} else {
 				newName = fmt.Sprintf("%sS%02dE%02d%s", pureTitle, season, ep, ext)
 			}
-		} else {
-			if res.TitleDir == "" {
-				res.Skipped = append(res.Skipped, v.Name)
+			if newName == v.Name {
 				continue
 			}
-			movieIdx++
-			if movieIdx == 1 {
-				newName = res.TitleDir + ext
-			} else {
-				newName = fmt.Sprintf("%s-%d%s", res.TitleDir, movieIdx, ext)
+			if err := c.Rename(ctx, v.Identity, newName); err != nil {
+				log.Printf("OrganizeTask: rename %q -> %q failed: %v", v.Name, newName, err)
+				res.Skipped = append(res.Skipped, v.Name+" (重命名失败)")
+				continue
 			}
+			log.Printf("OrganizeTask: rename %q -> %q", v.Name, newName)
+			res.Renamed = append(res.Renamed, RenameRecord{Old: v.Name, New: newName})
 		}
-		if newName == v.Name {
-			continue
-		}
-		if err := c.Rename(ctx, v.Identity, newName); err != nil {
-			log.Printf("OrganizeTask: rename %q -> %q failed: %v", v.Name, newName, err)
-			res.Skipped = append(res.Skipped, v.Name+" (重命名失败)")
-			continue
-		}
-		log.Printf("OrganizeTask: rename %q -> %q", v.Name, newName)
-		res.Renamed = append(res.Renamed, RenameRecord{Old: v.Name, New: newName})
 	}
 
 	// 删除 savePath 下的 BT 子目录（视频已移出、广告已删，子目录为 BT 残留）。

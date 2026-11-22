@@ -36,9 +36,10 @@ type OrganizeLog struct {
 	Season      int                  `json:"season,omitempty"`
 	OK          bool                 `json:"ok"`
 	Error       string               `json:"error,omitempty"`
-	Deleted     []string             `json:"deleted,omitempty"` // 被删的广告/杂项文件名（含 BT 子目录名）
-	Renamed     []drive.RenameRecord `json:"renamed,omitempty"` // 重命名映射
-	Skipped     []string             `json:"skipped,omitempty"` // 跳过的视频（解析不到集数等）
+	Deleted     []string             `json:"deleted,omitempty"`    // 被删的广告/杂项文件名（含 BT 子目录名）
+	Renamed     []drive.RenameRecord `json:"renamed,omitempty"`    // 重命名映射
+	SplitDirs   []string             `json:"split_dirs,omitempty"` // 电影按片名拆分出的新目录（系列合集/多部混装）
+	Skipped     []string             `json:"skipped,omitempty"`    // 跳过的视频（解析不到集数等）
 }
 
 // newOrganizeLog 由一次整理结果构造记录。res 为空（整理整体失败）时只记路径与错误。
@@ -68,6 +69,7 @@ func newOrganizeLog(trigger, taskName, savePath string, res *drive.OrganizeResul
 		rec.Season = res.Season
 		rec.Deleted = res.Deleted
 		rec.Renamed = res.Renamed
+		rec.SplitDirs = res.SplitDirs
 		rec.Skipped = res.Skipped
 	}
 	return rec

@@ -859,7 +859,7 @@
   async function organizeTask(savePath, name) {
     const r = await confirmDialog({
       title: '整理文件',
-      message: `整理任务「<b>${esc(name)}</b>」的下载文件？<br><span class="muted text-xs">将删除非视频广告文件，并把视频重命名为规范格式（电影：<标题> (<年份>)；剧集：标题S01E05）</span>`,
+      message: `整理任务「<b>${esc(name)}</b>」的下载文件？<br><span class="muted text-xs">将删除非视频广告文件，并把视频重命名为规范格式（电影：<标题> (<年份>)，系列合集按片名拆分目录；剧集：标题S01E05）</span>`,
       confirmText: '整理',
       danger: false,
       checkboxLabel: '',
@@ -879,7 +879,8 @@
     const del = (res.deleted || []).map(n => `<li>🗑 ${esc(n)}</li>`).join('');
     const rn = (res.renamed || []).map(r => `<li>✏️ <s>${esc(r.old)}</s> → <b>${esc(r.new)}</b></li>`).join('');
     const sk = (res.skipped || []).map(n => `<li>⏭️ ${esc(n)}</li>`).join('');
-    const empty = (!del && !rn && !sk) ? '<div class="muted">该目录下没有需要整理的文件（可能已整理过或无视频文件）</div>' : '';
+    const sp = (res.split_dirs || []).map(n => `<li>📂 ${esc(n)}</li>`).join('');
+    const empty = (!del && !rn && !sk && !sp) ? '<div class="muted">该目录下没有需要整理的文件（可能已整理过或无视频文件）</div>' : '';
     root.innerHTML = `
     <div class="modal-mask" id="orgMask">
       <div class="modal">
@@ -889,6 +890,7 @@
           <div class="text-xs muted mb-8">📁 ${esc(res.save_path || '')}</div>
           <div class="text-xs muted mb-8">🧾 已记入「📝 整理记录」：任务名、整理前路径与逐条改名都在那里，可随时回溯原名</div>
           ${empty}
+          ${sp ? `<div class="mt-8 text-sm"><b>按片名拆分（${res.split_dirs.length}）</b><div class="muted text-xs">系列合集/多部混装会各自建目录，不再挤成一个名字加 -2/-3</div></div><ul class="org-list">${sp}</ul>` : ''}
           ${del ? `<div class="mt-8 text-sm"><b>删除广告/杂项（${res.deleted.length}）</b></div><ul class="org-list">${del}</ul>` : ''}
           ${rn ? `<div class="mt-8 text-sm"><b>重命名视频（${res.renamed.length}）</b></div><ul class="org-list">${rn}</ul>` : ''}
           ${sk ? `<div class="mt-8 text-sm"><b>跳过（${res.skipped.length}）</b><div class="muted text-xs">剧集文件解析不到集数时会跳过，保留原名</div></div><ul class="org-list">${sk}</ul>` : ''}
@@ -1096,6 +1098,7 @@
   function orgLogText(r) {
     const parts = [r.task_name, r.save_path, r.archive_path, r.title_dir, r.category, r.error];
     (r.renamed || []).forEach(x => { parts.push(x.old); parts.push(x.new); });
+    (r.split_dirs || []).forEach(x => parts.push(x));
     (r.deleted || []).forEach(x => parts.push(x));
     (r.skipped || []).forEach(x => parts.push(x));
     return parts.filter(Boolean).join(' ').toLowerCase();
@@ -1122,7 +1125,10 @@
   function orgLogCard(r) {
     const tg = triggerInfo(r.trigger);
     const status = r.ok ? '<span class="tag ok">成功</span>' : '<span class="tag err">失败</span>';
-    const rn = r.renamed || [], del = r.deleted || [], sk = r.skipped || [];
+    const rn = r.renamed || [], del = r.deleted || [], sk = r.skipped || [], sp = r.split_dirs || [];
+    const spHtml = sp.length ? `
+      <div class="orglog-sec">按片名拆分出的目录（系列合集/多部混装）</div>
+      <ul class="org-list">${sp.map(n => `<li>📂 ${esc(n)}</li>`).join('')}</ul>` : '';
     const rnHtml = rn.length ? `
       <div class="orglog-sec">重命名视频（原文件名 → 新文件名）</div>
       <ul class="org-list">${rn.slice(0, 60).map(x => `<li>✏️ <s>${esc(x.old)}</s> → <b>${esc(x.new)}</b></li>`).join('')}${rn.length > 60 ? `<li class="muted">…还有 ${rn.length - 60} 条（完整内容见服务端 organize_logs.json）</li>` : ''}</ul>` : '';
@@ -1152,8 +1158,8 @@
       <div class="orglog-kv"><span class="k">原标题目录</span><span class="v">${esc(r.title_dir || '(未解析到)')}${r.is_tv && r.season ? ` · 第${r.season}季` : ''}${r.category ? ` · ${esc(catName(r.category))}` : ''}</span></div>
       <div class="orglog-kv"><span class="k">整理前路径</span><span class="v">${esc(r.save_path || '')}</span></div>
       ${r.archive_path ? `<div class="orglog-kv"><span class="k">归档后路径</span><span class="v">${esc(r.archive_path)}</span></div>` : ''}
-      <div class="orglog-counts">重命名 ${rn.length} · 删除 ${del.length} · 跳过 ${sk.length}</div>
-      ${rnHtml}${delHtml}${skHtml}
+      <div class="orglog-counts">重命名 ${rn.length} · 拆分 ${sp.length} · 删除 ${del.length} · 跳过 ${sk.length}</div>
+      ${spHtml}${rnHtml}${delHtml}${skHtml}
     </div>`;
   }
   async function deleteOrganizeLog(id) {
