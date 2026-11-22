@@ -135,3 +135,5 @@ docker compose up -d --build
 | TMDB 规范化不生效 | 检查 `tmdb_api_key` 是否填写、`tmdb_proxy` 能否从容器内访问 |
 | 搜索无结果 | 6v520 站点改版或网络不通；适当调大 `max_pages` |
 | 端口被占用 | 改 `-p 9090:8080` 并同步改 `config.json` 的 `listen` 为 `:8080`（容器内不变） |
+| `docker compose build` 报 `failed to resolve source metadata for docker.io/docker/dockerfile:1`（401） | 镜像加速器不代理 Dockerfile 前端镜像。用经典构建绕过：`DOCKER_BUILDKIT=0 docker build -t 6v-to-2dland:latest .`（本仓库 Dockerfile 不含 BuildKit 专有语法，经典构建等价） |
+| 经典构建卡在 `Get https://registry-1.docker.io/v2/: context deadline exceeded` | 网络直连 Docker Hub 失败。先用可用镜像站拉基础镜像再打标签：`docker pull <mirror>/library/golang:1.26-alpine && docker tag <mirror>/library/golang:1.26-alpine golang:1.26-alpine`，`alpine:3.24` 同理，然后重新 `DOCKER_BUILDKIT=0 docker build` |
