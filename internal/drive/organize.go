@@ -74,6 +74,7 @@ type OrganizeResult struct {
 	Deleted          []string       `json:"deleted"`            // 被删除的广告/杂项文件名
 	Renamed          []RenameRecord `json:"renamed"`            // 重命名记录
 	SplitDirs        []string       `json:"split_dirs"`         // 电影按片名拆分出的新目录（系列合集/多部混装）
+	SeasonDirs       []string       `json:"season_dirs"`        // 多季合集按文件季号归位时的「第N季」目录
 	Skipped          []string       `json:"skipped"`            // 跳过的视频文件（无法解析集数等）
 }
 
@@ -263,6 +264,7 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 		type epPlan struct {
 			file    *userfile.File
 			newName string
+			season  int
 		}
 		plans := make([]epPlan, 0, len(videos))
 		for _, v := range videos {
@@ -285,7 +287,41 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 			} else {
 				newName = fmt.Sprintf("%sS%02dE%02d%s", pureTitle, season, ep, ext)
 			}
-			plans = append(plans, epPlan{file: v, newName: newName})
+			plans = append(plans, epPlan{file: v, newName: newName, season: season})
+		}
+
+		// 多季合集：整包下载时 S01/S02/S03 的文件都落在同一个标题目录里，
+		// 若只按目录推季，S02 的集数会全被塞进「第1季」。这里按文件自身季号归位。
+		seasonDirs := map[int]string{}
+		for i := range plans {
+			p := &plans[i]
+			if p.newName == "" {
+				continue
+			}
+			dirName := seasonDirName(p.season, res.Season)
+			if dirName == "" {
+				continue
+			}
+			dir, ok := seasonDirs[p.season]
+			if !ok {
+				dir, err = c.ensureSeasonDir(ctx, savePath, dirName)
+				if err != nil {
+					log.Printf("OrganizeTask: create season dir %q failed: %v", dirName, err)
+					res.Skipped = append(res.Skipped, p.file.Name+" (建季目录失败)")
+					dir = ""
+				}
+				seasonDirs[p.season] = dir
+			}
+			if dir == "" {
+				continue
+			}
+			if err := c.Move(ctx, []string{p.file.Identity}, dir); err != nil {
+				log.Printf("OrganizeTask: move %q -> %q failed: %v", p.file.Name, dir, err)
+				res.Skipped = append(res.Skipped, p.file.Name+" (移入季目录失败)")
+				continue
+			}
+			log.Printf("OrganizeTask: move %q -> %q (season %d)", p.file.Name, dir, p.season)
+			res.SeasonDirs = appendUnique(res.SeasonDirs, dirName)
 		}
 
 		// 占位：当前目录里已存在的非视频文件（字幕/海报）+ 本轮不改名的视频
@@ -592,6 +628,40 @@ func classifyFiles(files []*userfile.File) (videos []*userfile.File, junkIDs, ju
 		}
 	}
 	return videos, junkIDs, junkNames
+}
+
+// seasonDirName 返回某集应归入的季目录名；与标题目录基季一致（或解析不出季）时返回空，表示不搬。
+// 多季合集整包下载时，S02/S03 的文件都落在同一个标题目录里，靠这个函数分流到「第N季」。
+func seasonDirName(fileSeason, baseSeason int) string {
+	if fileSeason <= 0 || fileSeason == baseSeason {
+		return ""
+	}
+	return fmt.Sprintf("第%d季", fileSeason)
+}
+
+// ensureSeasonDir 在 parent 下确保「第N季」目录存在（已存在则复用），返回目录路径。
+func (c *Client) ensureSeasonDir(ctx context.Context, parent, name string) (string, error) {
+	if files, err := c.ListFiles(ctx, parent); err == nil {
+		for _, f := range files {
+			if f.Dir && f.Name == name {
+				return joinPath(parent, name), nil
+			}
+		}
+	}
+	if _, err := c.Mkdir(ctx, parent, name); err != nil {
+		return "", err
+	}
+	return joinPath(parent, name), nil
+}
+
+// appendUnique 追加不重复的字符串。
+func appendUnique(list []string, v string) []string {
+	for _, s := range list {
+		if s == v {
+			return list
+		}
+	}
+	return append(list, v)
 }
 
 // existingNames 返回目录下现有文件名（小写）集合，用于重命名去重。

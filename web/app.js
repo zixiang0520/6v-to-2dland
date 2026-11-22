@@ -880,7 +880,8 @@
     const rn = (res.renamed || []).map(r => `<li>✏️ <s>${esc(r.old)}</s> → <b>${esc(r.new)}</b></li>`).join('');
     const sk = (res.skipped || []).map(n => `<li>⏭️ ${esc(n)}</li>`).join('');
     const sp = (res.split_dirs || []).map(n => `<li>📂 ${esc(n)}</li>`).join('');
-    const empty = (!del && !rn && !sk && !sp) ? '<div class="muted">该目录下没有需要整理的文件（可能已整理过或无视频文件）</div>' : '';
+    const sd = (res.season_dirs || []).map(n => `<li>🗂 ${esc(n)}</li>`).join('');
+    const empty = (!del && !rn && !sk && !sp && !sd) ? '<div class="muted">该目录下没有需要整理的文件（可能已整理过或无视频文件）</div>' : '';
     root.innerHTML = `
     <div class="modal-mask" id="orgMask">
       <div class="modal">
@@ -891,6 +892,7 @@
           <div class="text-xs muted mb-8">🧾 已记入「📝 整理记录」：任务名、整理前路径与逐条改名都在那里，可随时回溯原名</div>
           ${empty}
           ${sp ? `<div class="mt-8 text-sm"><b>按片名拆分（${res.split_dirs.length}）</b><div class="muted text-xs">系列合集/多部混装会各自建目录，不再挤成一个名字加 -2/-3</div></div><ul class="org-list">${sp}</ul>` : ''}
+          ${sd ? `<div class="mt-8 text-sm"><b>按季归位（${res.season_dirs.length}）</b><div class="muted text-xs">多季合集里 S02/S03 的集数会移进对应「第N季」目录</div></div><ul class="org-list">${sd}</ul>` : ''}
           ${del ? `<div class="mt-8 text-sm"><b>删除广告/杂项（${res.deleted.length}）</b></div><ul class="org-list">${del}</ul>` : ''}
           ${rn ? `<div class="mt-8 text-sm"><b>重命名视频（${res.renamed.length}）</b></div><ul class="org-list">${rn}</ul>` : ''}
           ${sk ? `<div class="mt-8 text-sm"><b>跳过（${res.skipped.length}）</b><div class="muted text-xs">剧集文件解析不到集数时会跳过，保留原名</div></div><ul class="org-list">${sk}</ul>` : ''}
@@ -1099,6 +1101,7 @@
     const parts = [r.task_name, r.save_path, r.archive_path, r.title_dir, r.category, r.error];
     (r.renamed || []).forEach(x => { parts.push(x.old); parts.push(x.new); });
     (r.split_dirs || []).forEach(x => parts.push(x));
+    (r.season_dirs || []).forEach(x => parts.push(x));
     (r.deleted || []).forEach(x => parts.push(x));
     (r.skipped || []).forEach(x => parts.push(x));
     return parts.filter(Boolean).join(' ').toLowerCase();
@@ -1125,7 +1128,10 @@
   function orgLogCard(r) {
     const tg = triggerInfo(r.trigger);
     const status = r.ok ? '<span class="tag ok">成功</span>' : '<span class="tag err">失败</span>';
-    const rn = r.renamed || [], del = r.deleted || [], sk = r.skipped || [], sp = r.split_dirs || [];
+    const rn = r.renamed || [], del = r.deleted || [], sk = r.skipped || [], sp = r.split_dirs || [], sd = r.season_dirs || [];
+    const sdHtml = sd.length ? `
+      <div class="orglog-sec">按季归位（多季合集）</div>
+      <ul class="org-list">${sd.map(n => `<li>🗂 ${esc(n)}</li>`).join('')}</ul>` : '';
     const spHtml = sp.length ? `
       <div class="orglog-sec">按片名拆分出的目录（系列合集/多部混装）</div>
       <ul class="org-list">${sp.map(n => `<li>📂 ${esc(n)}</li>`).join('')}</ul>` : '';
@@ -1159,7 +1165,7 @@
       <div class="orglog-kv"><span class="k">整理前路径</span><span class="v">${esc(r.save_path || '')}</span></div>
       ${r.archive_path ? `<div class="orglog-kv"><span class="k">归档后路径</span><span class="v">${esc(r.archive_path)}</span></div>` : ''}
       <div class="orglog-counts">重命名 ${rn.length} · 拆分 ${sp.length} · 删除 ${del.length} · 跳过 ${sk.length}</div>
-      ${spHtml}${rnHtml}${delHtml}${skHtml}
+      ${spHtml}${sdHtml}${rnHtml}${delHtml}${skHtml}
     </div>`;
   }
   async function deleteOrganizeLog(id) {

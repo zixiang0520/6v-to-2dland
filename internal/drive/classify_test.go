@@ -110,3 +110,39 @@ func TestParseSeasonArabic(t *testing.T) {
 		t.Fatalf("no-season title should report ok=false, got %d", n)
 	}
 }
+
+func TestSeasonDirName(t *testing.T) {
+	cases := []struct {
+		fileSeason, baseSeason int
+		want                   string
+	}{
+		{1, 1, ""},    // 本季文件，不搬
+		{2, 1, "第2季"}, // 多季合集里的 S02 要归位
+		{3, 1, "第3季"},
+		{0, 1, ""}, // 解析不出季，不搬
+		{5, 0, "第5季"},
+	}
+	for _, c := range cases {
+		if got := seasonDirName(c.fileSeason, c.baseSeason); got != c.want {
+			t.Errorf("seasonDirName(%d,%d) = %q, want %q", c.fileSeason, c.baseSeason, got, c.want)
+		}
+	}
+}
+
+func TestMultiSeasonPackSeasons(t *testing.T) {
+	// 一个任务包同时下 S01/S02，逐个文件解析季号
+	files := []string{
+		"某剧.S01E01.1080p.mkv",
+		"某剧.S01E02.1080p.mkv",
+		"某剧.S02E01.1080p.mkv",
+	}
+	want := []int{1, 1, 2}
+	for i, f := range files {
+		if got := parseSeasonFromName(f); got != want[i] {
+			t.Errorf("parseSeasonFromName(%q) = %d, want %d", f, got, want[i])
+		}
+		if ep := parseEpisode(f); ep == 0 {
+			t.Errorf("parseEpisode(%q) = 0", f)
+		}
+	}
+}
