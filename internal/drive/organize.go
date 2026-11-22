@@ -12,7 +12,7 @@ import (
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/userfile"
 )
 
-// videoExts 是视频文件扩展名白名单，其余扩展名视为广告/杂项文件清理掉。
+// videoExts 是视频文件扩展名白名单。
 var videoExts = map[string]bool{
 	".mp4": true, ".mkv": true, ".avi": true, ".rmvb": true,
 	".ts": true, ".m4v": true, ".mov": true, ".wmv": true,
@@ -21,22 +21,43 @@ var videoExts = map[string]bool{
 	".mts": true, ".f4v": true, ".rm": true, ".asf": true,
 }
 
+// junkExts 是明确要清理的广告/垃圾文件扩展名（白名单式删除）。
+// 旧实现是「非视频即广告」，把 .srt/.ass 字幕、.nfo、海报一并送进回收站，
+// 整理完片子里没字幕——这是最常被吐槽的「整理不准确」。
+// 现在改成只删确定的垃圾，其余一律保留：宁可在目录里留个 txt，也不误删字幕。
+var junkExts = map[string]bool{
+	".txt": true, ".url": true, ".htm": true, ".html": true,
+	".torrent": true, ".exe": true, ".lnk": true, ".js": true,
+	".apk": true, ".bat": true, ".cmd": true, ".vbs": true,
+	".scr": true, ".dll": true, ".msi": true, ".dmg": true,
+	".pkg": true,
+}
+
+// shouldTrashFile 判断一个文件是否属于要清理的广告/垃圾。
+// 字幕（.srt/.ass/.sup…）、音轨、NFO、海报、字体都不在 junkExts 里，因此会被保留。
+func shouldTrashFile(name string) bool {
+	return junkExts[strings.ToLower(path.Ext(name))]
+}
+
 // epRe 从文件名解析集数：S01E05 / E05 / EP05。
 // 不用 \b：Go RE2 里 \b 对中文边界不可靠；用 (?:^|[^A-Za-z0-9]) 当左边界。
 // 明确排除 720p/1080p 这种分辨率，避免 E80 / E20 误匹配。
 var epRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])(?:S\d{1,2})?E(?:P)?(\d{1,3})(?:[^A-Za-z0-9]|$)`)
 
-// epCnRe 匹配中文集数：第5集 / 第05集 / 第17话 / 更新04。
-var epCnRe = regexp.MustCompile(`(?:第(\d{1,3})[集话回]|更新(\d{1,3}))`)
+// epCnRe 匹配中文集数：第5集 / 第05集 / 第17话 / 第3期(综艺) / 更新04 / 更新至12。
+var epCnRe = regexp.MustCompile(`(?:第\s*(\d{1,4})(?:\s*[-~～至]\s*\d{1,4})?\s*[集话回期]|更新(?:至)?\s*(\d{1,4}))`)
 
 // epRangeRe 合集文件名 S02E01-03：取起始集。
-var epRangeRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])S\d{1,2}E(\d{1,3})\s*[-~～]\s*\d{1,3}`)
+var epRangeRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])S\d{1,2}E(\d{1,3})\s*[-~～至]\s*\d{1,3}`)
+
+// epBareRe 匹配「纯数字集号」：剧名.01.mkv / 剧名 - 12 - 1080p / 剧名 [07]。
+// 要求数字两侧都是分隔符，避免把片名里的数字（X战警97、1917）当集数。
+var epBareRe = regexp.MustCompile(`(?:^|[.\s_\-\[\]()~．])(\d{1,4})(?:[.\s_\-\[\]()~．]|$)`)
 
 // fileSeasonRe 从文件名取季数：S02E05 → 2。
 var fileSeasonRe = regexp.MustCompile(`(?i)(?:^|[^A-Za-z0-9])S(\d{1,2})E\d{1,3}`)
 
-// seasonNumRe 从「第N季」目录名解析季数。
-var seasonNumRe = regexp.MustCompile(`第(\d{1,2})季`)
+// seasonNumRe 已由 ParseSeasonOK 取代（支持「第2季」「第二季」两种写法）。
 
 // yearSuffixRe 匹配标题目录名末尾的「 (年份)」，用于提取纯标题。
 var yearSuffixRe = regexp.MustCompile(`\s*\(\d{4}\)\s*$`)
@@ -97,10 +118,8 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 		res.TitleDir = parts[1]
 	}
 	if res.IsTV && len(parts) >= 3 {
-		if m := seasonNumRe.FindStringSubmatch(parts[2]); m != nil {
-			if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
-				res.Season = n
-			}
+		if n, ok := ParseSeasonOK(parts[2]); ok {
+			res.Season = n
 		}
 	}
 	log.Printf("OrganizeTask: savePath=%q category=%q isTV=%v titleDir=%q season=%d", savePath, cat, res.IsTV, res.TitleDir, res.Season)
@@ -144,21 +163,8 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 		}
 	}
 
-	// 分类：视频 vs 广告
-	var adIDs, adNames []string
-	var videos []*userfile.File
-	for _, f := range allFiles {
-		if f.Dir {
-			continue
-		}
-		ext := strings.ToLower(path.Ext(f.Name))
-		if videoExts[ext] {
-			videos = append(videos, f)
-		} else {
-			adIDs = append(adIDs, f.Identity)
-			adNames = append(adNames, f.Name)
-		}
-	}
+	// 分类：视频 / 要清理的垃圾（字幕、音轨、海报等一律保留）
+	videos, adIDs, adNames := classifyFiles(allFiles)
 	log.Printf("OrganizeTask: total=%d videos=%d ads=%d", len(allFiles), len(videos), len(adIDs))
 	if len(videos) == 0 {
 		log.Printf("OrganizeTask: no video files yet, skip archive/organize savePath=%q", savePath)
@@ -179,19 +185,7 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 				res.SavePath = archived
 				res.ArchivePath = archived
 				allFiles = refreshed
-				adIDs, adNames, videos = nil, nil, nil
-				for _, f := range allFiles {
-					if f.Dir {
-						continue
-					}
-					ext := strings.ToLower(path.Ext(f.Name))
-					if videoExts[ext] {
-						videos = append(videos, f)
-					} else {
-						adIDs = append(adIDs, f.Identity)
-						adNames = append(adNames, f.Name)
-					}
-				}
+				videos, adIDs, adNames = classifyFiles(allFiles)
 				log.Printf("OrganizeTask: refreshed after pre-archive fallback total=%d videos=%d ads=%d", len(allFiles), len(videos), len(adIDs))
 			} else {
 				res.Skipped = append(res.Skipped, "归档移动失败: "+err.Error())
@@ -206,19 +200,7 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 		res.ArchivePath = dest
 		if refreshed, err := c.listAllFilesRecursive(ctx, savePath); err == nil {
 			allFiles = refreshed
-			adIDs, adNames, videos = nil, nil, nil
-			for _, f := range allFiles {
-				if f.Dir {
-					continue
-				}
-				ext := strings.ToLower(path.Ext(f.Name))
-				if videoExts[ext] {
-					videos = append(videos, f)
-				} else {
-					adIDs = append(adIDs, f.Identity)
-					adNames = append(adNames, f.Name)
-				}
-			}
+			videos, adIDs, adNames = classifyFiles(allFiles)
 			log.Printf("OrganizeTask: refreshed after pre-archive total=%d videos=%d ads=%d", len(allFiles), len(videos), len(adIDs))
 		} else {
 			log.Printf("OrganizeTask: refresh files after pre-archive failed: %v", err)
@@ -276,12 +258,20 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 	} else if !res.IsTV {
 		res.SplitDirs = c.organizeMovies(ctx, savePath, res, videos, res.TitleDir)
 	} else {
+		// 先算好每个文件的目标名，再统一分配，避免「多版本同集」（1080p + 2160p）
+		// 都改成同一个 S01E05 后互相覆盖/重命名失败。
+		type epPlan struct {
+			file    *userfile.File
+			newName string
+		}
+		plans := make([]epPlan, 0, len(videos))
 		for _, v := range videos {
 			ext := path.Ext(v.Name)
 			ep := parseEpisode(v.Name)
 			if ep == 0 {
 				// 剧集解析不到集数，跳过不重命名（避免误改名）
 				res.Skipped = append(res.Skipped, v.Name)
+				plans = append(plans, epPlan{file: v})
 				continue
 			}
 			season := res.Season
@@ -295,16 +285,29 @@ func (c *Client) OrganizeTask(ctx context.Context, savePath string) (*OrganizeRe
 			} else {
 				newName = fmt.Sprintf("%sS%02dE%02d%s", pureTitle, season, ep, ext)
 			}
-			if newName == v.Name {
+			plans = append(plans, epPlan{file: v, newName: newName})
+		}
+
+		// 占位：当前目录里已存在的非视频文件（字幕/海报）+ 本轮不改名的视频
+		used := c.existingNames(ctx, savePath)
+		for _, p := range plans {
+			if p.newName == "" || strings.EqualFold(p.newName, p.file.Name) {
+				used[strings.ToLower(p.file.Name)] = true
+			}
+		}
+		for i := range plans {
+			p := &plans[i]
+			if p.newName == "" || strings.EqualFold(p.newName, p.file.Name) {
 				continue
 			}
-			if err := c.Rename(ctx, v.Identity, newName); err != nil {
-				log.Printf("OrganizeTask: rename %q -> %q failed: %v", v.Name, newName, err)
-				res.Skipped = append(res.Skipped, v.Name+" (重命名失败)")
+			p.newName = uniqueVideoName(used, p.newName, p.file.Name)
+			if err := c.Rename(ctx, p.file.Identity, p.newName); err != nil {
+				log.Printf("OrganizeTask: rename %q -> %q failed: %v", p.file.Name, p.newName, err)
+				res.Skipped = append(res.Skipped, p.file.Name+" (重命名失败)")
 				continue
 			}
-			log.Printf("OrganizeTask: rename %q -> %q", v.Name, newName)
-			res.Renamed = append(res.Renamed, RenameRecord{Old: v.Name, New: newName})
+			log.Printf("OrganizeTask: rename %q -> %q", p.file.Name, p.newName)
+			res.Renamed = append(res.Renamed, RenameRecord{Old: p.file.Name, New: p.newName})
 		}
 	}
 
@@ -490,7 +493,8 @@ func (c *Client) listAllFilesRecursive(ctx context.Context, parentPath string) (
 }
 
 // parseEpisode 从文件名解析集数，解析不到返回 0。
-// 优先合集起始集（S02E01-03 → 1），再 S01E05 / E05 / EP05，再「第5集/第17话/更新04」。
+// 优先合集起始集（S02E01-03 → 1），再 S01E05 / E05 / EP05，再「第5集/第17话/第3期/更新04」，
+// 最后才是纯数字集号（剧名.01.mkv）。
 func parseEpisode(name string) int {
 	base := strings.TrimSuffix(name, path.Ext(name))
 	if m := epRangeRe.FindStringSubmatch(base); m != nil {
@@ -512,7 +516,46 @@ func parseEpisode(name string) int {
 			return n
 		}
 	}
+	return parseBareEpisode(base)
+}
+
+// parseBareEpisode 从「纯数字集号」命名里取集数，多个候选或疑似分辨率/年份时放弃。
+// 例：某剧.01.mkv → 1；某剧 - 12 - 1080p.mkv → 12；某剧.2024.1080p.mkv → 0。
+func parseBareEpisode(base string) int {
+	ms := epBareRe.FindAllStringSubmatch(base, -1)
+	if len(ms) == 0 {
+		return 0
+	}
+	seen := map[int]bool{}
+	var found []int
+	for _, m := range ms {
+		n, err := strconv.Atoi(m[1])
+		if err != nil || !plausibleEpisodeNumber(n) || seen[n] {
+			continue
+		}
+		seen[n] = true
+		found = append(found, n)
+	}
+	// 只有一个候选才敢用：多个数字（如「第01-02集」拆开后）无法判断
+	if len(found) == 1 {
+		return found[0]
+	}
 	return 0
+}
+
+// plausibleEpisodeNumber 排除分辨率、编码标记与年份，避免把 1080/2024 当集数。
+func plausibleEpisodeNumber(n int) bool {
+	if n <= 0 || n > 999 {
+		return false
+	}
+	switch n {
+	case 264, 265, 480, 540, 576, 720, 960, 1080, 1440, 2160, 4320:
+		return false
+	}
+	if n >= 1900 && n <= 2100 {
+		return false
+	}
+	return true
 }
 
 // parseSeasonFromName 从文件名解析季数（S02E05 → 2），没有则返回 0。
@@ -530,4 +573,73 @@ func parseSeasonFromName(name string) int {
 // 如「灵魂伴侣 (2026)」→「灵魂伴侣」；无年份后缀则原样返回。
 func stripYear(titleDir string) string {
 	return strings.TrimSpace(yearSuffixRe.ReplaceAllString(titleDir, ""))
+}
+
+// classifyFiles 把目录里的文件分成「视频」和「要清理的垃圾」。
+// 字幕、音轨、NFO、海报等附属文件不属于任何一类——保留，不删。
+func classifyFiles(files []*userfile.File) (videos []*userfile.File, junkIDs, junkNames []string) {
+	for _, f := range files {
+		if f.Dir {
+			continue
+		}
+		if videoExts[strings.ToLower(path.Ext(f.Name))] {
+			videos = append(videos, f)
+			continue
+		}
+		if shouldTrashFile(f.Name) {
+			junkIDs = append(junkIDs, f.Identity)
+			junkNames = append(junkNames, f.Name)
+		}
+	}
+	return videos, junkIDs, junkNames
+}
+
+// existingNames 返回目录下现有文件名（小写）集合，用于重命名去重。
+func (c *Client) existingNames(ctx context.Context, dir string) map[string]bool {
+	used := map[string]bool{}
+	files, err := c.ListFiles(ctx, dir)
+	if err != nil {
+		log.Printf("existingNames: list %q failed: %v (dedupe disabled)", dir, err)
+		return used
+	}
+	for _, f := range files {
+		if !f.Dir {
+			used[strings.ToLower(f.Name)] = true
+		}
+	}
+	return used
+}
+
+// qualitySuffix 从文件名里提取分辨率标识（1080p/2160p/4k），用于区分同集多版本。
+func qualitySuffix(name string) string {
+	if m := qualityRe.FindStringSubmatch(name); m != nil {
+		return normalizeQuality(m[1])
+	}
+	return ""
+}
+
+// uniqueVideoName 返回一个未被占用的文件名：先试原目标名，冲突时加分辨率标识，
+// 再冲突就加 -2/-3 序号，保证多版本同集不会互相覆盖。
+func uniqueVideoName(used map[string]bool, want, origName string) string {
+	if !used[strings.ToLower(want)] {
+		used[strings.ToLower(want)] = true
+		return want
+	}
+	ext := path.Ext(want)
+	base := strings.TrimSuffix(want, ext)
+	if q := qualitySuffix(origName); q != "" {
+		cand := base + "." + q + ext
+		if !used[strings.ToLower(cand)] {
+			used[strings.ToLower(cand)] = true
+			return cand
+		}
+	}
+	for i := 2; i < 50; i++ {
+		cand := fmt.Sprintf("%s-%d%s", base, i, ext)
+		if !used[strings.ToLower(cand)] {
+			used[strings.ToLower(cand)] = true
+			return cand
+		}
+	}
+	return want
 }

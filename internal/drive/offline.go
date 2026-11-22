@@ -164,42 +164,108 @@ func isRateLimited(err error) bool {
 	return strings.Contains(msg, "429") || strings.Contains(msg, "TOO_FREQUENTLY")
 }
 
-var titleRe = regexp.MustCompile(`(?:([0-9]{4}))?[^\d《]*《([^》]+)》`)
+var (
+	// bookTitleRe 抓《书名号》里的片名。旧版正则用 [^\d《]* 当分隔，片名里带阿拉伯数字
+	// （《1921》《24小时：末路重生》）时整条匹配失败，只能退回满是站名广告的原始标题。
+	bookTitleRe = regexp.MustCompile(`《([^》]{1,120})》`)
+	// yearNearRe 取书名号前最后一个 4 位年份。
+	yearNearRe = regexp.MustCompile(`(?:19|20)\d{2}`)
+	// noiseRe 清理无书名号标题里的站名、分辨率、编码等尾巴。
+	noiseRe = regexp.MustCompile(`(?i)[\.\-_\s]*(1080p|2160p|720p|480p|4k|8k|hd|bd|bluray|web-?dl|webrip|hdtv|hdrip|remux|x26[45]|h\.?26[45]|aac|ac3|dts|ddp?5\.1|国语|粤语|中字|中英双字|双语|无删减|完整版|纯净版|加长版|高清|抢先版|tc|ts版).*$`)
+	// bracketNoiseRe 去方括号内容（[电影天堂www.dy2018.com] 之类）。
+	bracketNoiseRe = regexp.MustCompile(`[\[【(（][^\]】)）]{0,60}[\]】)）]`)
+)
 
-// parseTitle 从 6v 标题中提取名字与年份，如 "2026科幻惊悚《灵魂伴侣》..." -> ("灵魂伴侣","2026")。
+// parseTitle 从 6v 标题中提取片名与年份。
+// 优先取《书名号》内容；没有书名号时剥掉站名/分辨率/编码噪音后取第一段。
+// 例："2026科幻惊悚《灵魂伴侣》1080p.HD中英双字" -> ("灵魂伴侣","2026")；
+//
+//	"《1921》2021.4K" -> ("1921","2021")；
+//	"某站 2025 最新大片 纯净版" -> ("某站 2025 最新大片","")。
 func parseTitle(t string) (name, year string) {
-	if m := titleRe.FindStringSubmatch(t); m != nil {
-		year = m[1]
-		name = m[2]
-		return
+	t = strings.TrimSpace(t)
+	if loc := bookTitleRe.FindStringSubmatchIndex(t); loc != nil && loc[2] >= 0 {
+		name = strings.TrimSpace(t[loc[2]:loc[3]])
+		// 书名号前的文本里取最靠近的一个年份
+		if ys := yearNearRe.FindAllString(t[:loc[0]], -1); len(ys) > 0 {
+			year = ys[len(ys)-1]
+		}
+		// 书名号后才出现年份的写法（《灵魂伴侣》2026）
+		if year == "" {
+			if ys := yearNearRe.FindAllString(t[loc[1]:], -1); len(ys) > 0 {
+				year = ys[0]
+			}
+		}
+		if name != "" {
+			return name, year
+		}
 	}
-	name = t
-	return
+	clean := bracketNoiseRe.ReplaceAllString(t, " ")
+	clean = noiseRe.ReplaceAllString(clean, " ")
+	clean = strings.Join(strings.Fields(clean), " ")
+	clean = strings.TrimSpace(strings.Trim(clean, " .-_·:：|"))
+
+	// 无书名号时按年份切分：片名自带年份（《1921》《2012》）很常见，
+	// 规则是「最后一个年份才是发行年份」，其余年份属于片名。
+	locs := yearNearRe.FindAllStringIndex(clean, -1)
+	switch {
+	case len(locs) >= 2:
+		last := locs[len(locs)-1]
+		year = clean[last[0]:last[1]]
+		clean = strings.TrimSpace(clean[:last[0]] + " " + clean[last[1]:])
+	case len(locs) == 1 && locs[0][0] > 0:
+		last := locs[0]
+		year = clean[last[0]:last[1]]
+		clean = strings.TrimSpace(clean[:last[0]] + " " + clean[last[1]:])
+	}
+
+	name = strings.TrimSpace(strings.Trim(strings.Join(strings.Fields(clean), " "), " .-_·:：|"))
+	// 兜底名字过长时截断，避免把整段宣传语做成目录名
+	if r := []rune(name); len(r) > 60 {
+		name = strings.TrimSpace(string(r[:60]))
+	}
+	if name == "" {
+		name = strings.TrimSpace(t)
+	}
+	return name, year
 }
 
-// normalizeFolderName 用 TMDB 规范化标题为 "名字 (年份)"，失败回退原标题。
+// normalizeFolderName 用 TMDB 规范化标题为 "名字 (年份)"。
+// 匹配不可靠时（重名、别名、年份对不上）退回 6v 标题里的片名，而不是整句广告词。
 func normalizeFolderName(ctx context.Context, t *tmdb.Client, title, category string) string {
-	if t != nil {
-		name, year := parseTitle(title)
-		if name == "" {
-			name = title
-		}
-		mediaType := "movie"
-		if isTVCategory(category) {
-			mediaType = "tv"
-		}
-		if r, err := t.Search(ctx, name, mediaType); err == nil && r != nil && r.Title != "" {
-			y := tmdb.YearFromDate(r.Date)
-			if y == "" {
-				y = year
-			}
-			if y != "" {
-				return sanitize(r.Title + " (" + y + ")")
-			}
-			return sanitize(r.Title)
+	name, year := parseTitle(title)
+	if name == "" {
+		name = title
+	}
+	fallback := sanitize(name)
+	if t == nil {
+		return fallback
+	}
+	mediaType := "movie"
+	if isTVCategory(category) {
+		mediaType = "tv"
+	}
+	r, err := t.Best(ctx, name, mediaType, year)
+	if err != nil {
+		return fallback
+	}
+	// 6v 标题里的年份常是发布年（老片重发），带年份匹配失败时再用标题单独试一次。
+	if r == nil && year != "" {
+		if r2, err2 := t.Best(ctx, name, mediaType, ""); err2 == nil {
+			r = r2
 		}
 	}
-	return sanitize(title)
+	if r == nil || r.Title == "" {
+		return fallback
+	}
+	y := tmdb.YearFromDate(r.Date)
+	if y == "" {
+		y = year
+	}
+	if y != "" {
+		return sanitize(r.Title + " (" + y + ")")
+	}
+	return sanitize(r.Title)
 }
 
 // ListTasks 列出全部离线下载任务。
