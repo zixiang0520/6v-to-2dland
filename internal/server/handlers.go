@@ -249,6 +249,32 @@ func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// taskRetry 重试一个超时/失败任务（典型：status=110 取种超时）：
+// 删除旧任务记录（保留文件）+ 用原磁力按原保存路径重新提交。
+func (s *Server) taskRetry(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Identity string `json:"identity"`
+	}
+	if err := decodeJSON(r, &body); err != nil {
+		writeJSON(w, http.StatusBadRequest, errResp(err))
+		return
+	}
+	if body.Identity == "" {
+		writeJSON(w, http.StatusBadRequest, errStr("缺少 identity"))
+		return
+	}
+	// Push 内部含 2dland 限流自动重试（最长可达数分钟），给足超时。
+	ctx, cancel := context.WithTimeout(r.Context(), 150*time.Second)
+	defer cancel()
+	log.Printf("AUDIT: taskRetry identity=%s remote=%s", body.Identity, r.RemoteAddr)
+	ri, err := s.drive.RetryTask(ctx, body.Identity)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "item": ri})
+}
+
 // taskOrganizeBatch 批量整理/转移已完成任务的下载文件（「转移已下载」「批量整理」共用）。
 // 逐项调 OrganizeTask：转移到已下载 + 删广告 + 规范命名；单项失败不影响其余项。
 func (s *Server) taskOrganizeBatch(w http.ResponseWriter, r *http.Request) {

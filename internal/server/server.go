@@ -136,6 +136,7 @@ func (s *Server) Routes() http.Handler {
 	mux.HandleFunc("POST /api/push", s.requireAuth(s.push))
 	mux.HandleFunc("GET /api/tasks", s.requireAuth(s.tasks))
 	mux.HandleFunc("POST /api/tasks/delete", s.requireAuth(s.deleteTask))
+	mux.HandleFunc("POST /api/tasks/retry", s.requireAuth(s.taskRetry))
 	mux.HandleFunc("POST /api/tasks/organize", s.requireAuth(s.taskOrganize))
 	mux.HandleFunc("POST /api/tasks/organize-batch", s.requireAuth(s.taskOrganizeBatch))
 	mux.HandleFunc("POST /api/tasks/probe", s.requireAuth(s.taskProbe))
