@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 )
 
 // Config 是应用配置，对应 config.json。
@@ -18,9 +19,10 @@ type Config struct {
 	TokenFile      string `json:"token_file"`      // token 持久化文件，默认 token.json
 	SiteBase       string `json:"site_base"`       // 6v520 站点根，默认 https://www.6v520.com
 
-	TmdbAPIKey string `json:"tmdb_api_key"`  // TMDB API Key，留空则不规范化
-	TmdbProxy  string `json:"tmdb_proxy"`    // 访问 TMDB 的代理，如 http://127.0.0.1:7890
-	TmdbLang   string `json:"tmdb_language"` // TMDB 语言，默认 zh-CN
+	TmdbAPIKey   string `json:"tmdb_api_key"`   // TMDB API Key，留空则不规范化
+	TmdbProxy    string `json:"tmdb_proxy"`     // 访问 TMDB 的代理，如 http://127.0.0.1:7890
+	TmdbLang     string `json:"tmdb_language"`  // TMDB 语言，默认 zh-CN
+	TmdbAliases  string `json:"tmdb_aliases"`   // 本地别名表，每行「6v名 = TMDB名」，TMDB 搜不到时人工补充
 
 	// 订阅追更
 	SubIntervalMinutes int    `json:"sub_interval_minutes"`  // 兼容旧全局检查间隔
@@ -102,4 +104,39 @@ func Save(path string, c *Config) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// ParseAliases 把 tmdb_aliases 文本解析成映射。
+// 每行一条，支持「6v名 = TMDB名」「6v名: TMDB名」「6v名 TMDB名」（制表符分隔），
+// 空行与 # 注释行跳过；左边可带书名号（6v 页面标题常带《》）。
+func ParseAliases(text string) map[string]string {
+	out := map[string]string{}
+	sep := func(s string) (string, string, bool) {
+		for _, sym := range []string{"=", "：", ":", "\t"} {
+			if i := strings.Index(s, sym); i > 0 {
+				return strings.TrimSpace(s[:i]), strings.TrimSpace(s[i+len(sym):]), true
+			}
+		}
+		// 最后退到空白分隔（恰好两段时才认，避免一句话被误拆）。
+		f := strings.Fields(s)
+		if len(f) == 2 {
+			return f[0], f[1], true
+		}
+		return "", "", false
+	}
+	for _, line := range strings.Split(text, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		k, v, ok := sep(line)
+		if !ok || k == "" || v == "" {
+			continue
+		}
+		k = strings.Trim(k, "《》")
+		if k != "" && v != "" {
+			out[k] = v
+		}
+	}
+	return out
 }

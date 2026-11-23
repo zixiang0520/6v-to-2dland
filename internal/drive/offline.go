@@ -299,6 +299,11 @@ func (c *Client) ListTasks(ctx context.Context) ([]*UserTask, error) {
 				Progress:       float64(t.Progress),
 				BytesTotal:     t.BytesTotal,
 				BytesProcessed: t.BytesProcessed,
+				Code:           t.Code,
+				Message:        t.Message,
+				CreateTs:       t.CreateTs,
+				UpdateTs:       t.UpdateTs,
+				Size:           t.Size,
 			})
 		}
 		if resp.ListInfo == nil || resp.ListInfo.Token == "" || len(resp.Tasks) == 0 {

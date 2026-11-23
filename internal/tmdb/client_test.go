@@ -75,3 +75,49 @@ func TestNormalizeTitleStripsSeason(t *testing.T) {
 		t.Fatalf("got %q", got)
 	}
 }
+
+// 别名场景：6v 名「守护星」在 TMDB 搜不到可靠结果（词条名是「守护你，遇见爱」），
+// 配了别名后 Best 应按别名搜索并命中。
+func TestBestUsesAlias(t *testing.T) {
+	c := newTestClient(t, `{"results":[
+	 {"title":"银河护卫队3","release_date":"2023-05-05"},
+	 {"title":"守护你，遇见爱","original_title":"Guarding Stars","release_date":"2026-11-18"}
+	]}`)
+	c.SetAliases(map[string]string{"守护星": "守护你，遇见爱"})
+	r, err := c.Best(context.Background(), "守护星", "movie", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil || r.Title != "守护你，遇见爱" {
+		t.Fatalf("alias should hit 守护你，遇见爱, got %+v", r)
+	}
+}
+
+// 别名归一化：key 带书名号/空格/大小写差异也能命中。
+func TestBestAliasNormalizedKeys(t *testing.T) {
+	c := newTestClient(t, `{"results":[
+	 {"title":"完美骗子","original_title":"Perfectos mentirosos","release_date":"2026-01-01"}
+	]}`)
+	c.SetAliases(map[string]string{"《完美说谎者》": "完美骗子"})
+	r, err := c.Best(context.Background(), "完美说谎者", "movie", "2026")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r == nil || r.Title != "完美骗子" {
+		t.Fatalf("normalized alias should hit, got %+v", r)
+	}
+}
+
+// 无别名时行为不变：低分候选照样拒绝。
+func TestBestWithoutAliasStillRejects(t *testing.T) {
+	c := newTestClient(t, `{"results":[
+	 {"title":"守护你，遇见爱","release_date":"2026-11-18"}
+	]}`)
+	r, err := c.Best(context.Background(), "守护星", "movie", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r != nil {
+		t.Fatalf("no alias configured, low-score candidate must be rejected, got %+v", r)
+	}
+}

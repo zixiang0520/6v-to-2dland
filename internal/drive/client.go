@@ -104,12 +104,13 @@ func New(c *cfg.Config) *Client {
 	}
 	if c.TmdbAPIKey != "" {
 		cl.tmdb = tmdb.New(c.TmdbAPIKey, c.TmdbProxy, c.TmdbLang)
+		cl.tmdb.SetAliases(cfg.ParseAliases(c.TmdbAliases))
 	}
 	return cl
 }
 
-// UpdateTMDB 热更新 TMDB 配置；apiKey 为空则禁用规范化。
-func (c *Client) UpdateTMDB(apiKey, proxy, lang string) {
+// UpdateTMDB 热更新 TMDB 配置；apiKey 为空则禁用规范化。别名表一并热更。
+func (c *Client) UpdateTMDB(apiKey, proxy, lang, aliases string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if apiKey == "" {
@@ -117,6 +118,7 @@ func (c *Client) UpdateTMDB(apiKey, proxy, lang string) {
 		return
 	}
 	c.tmdb = tmdb.New(apiKey, proxy, lang)
+	c.tmdb.SetAliases(cfg.ParseAliases(aliases))
 }
 
 // UpdateBaseDir 热更新 2dland 根目录名。

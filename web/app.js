@@ -12,13 +12,20 @@
   // 6v 分类中文映射（与后端 categoryNames 保持一致）
   const catNames = { dy: '电影', gydy: '国语电影', gq: '经典高清', zydy: '动漫', jddy: '动画电影', '3D': '3D电影', dlz: '国剧', rj: '日韩剧', mj: '欧美剧', zy: '综艺', shoujidianyingmp4: '手机电影' };
   const catName = c => catNames[c] || c || '未分类';
-  // 2dland 任务状态：0=等待 1=解析 2=下载中 1000=已完成（实测）
-  const taskStatus = s => {
+  // 2dland 任务状态：1000=已完成（实测，秒传任务创建即 1000）、3=失败、0/1/2 旧版实测。
+  // 10/100 是「已提交但还没开始下载」的两档排队状态（2dland 未公开枚举），
+  // 这里按可观察的行为命名，并把原始状态码放进悬停提示，不编造官方词。
+  const taskStatus = t => {
+    const s = t.status;
+    const pct = Number(t.progress) || 0;
     if (s === 1000) return '已完成';
-    if (s === 0) return '等待中';
+    if (s === 3) return '失败';
     if (s === 1) return '解析中';
     if (s === 2) return '下载中';
-    if (s === 3) return '失败';
+    if (pct > 0 && pct < 100) return '下载中 ' + Math.floor(pct) + '%';
+    if (s === 10) return '排队中';
+    if (s === 100) return '等待下载';
+    if (s === 0) return '等待中';
     return '状态' + s;
   };
 
@@ -791,7 +798,7 @@
         </div>
         <div class="progress"><span style="width:${pct}%"></span></div>
         <div class="pct">${pct}%</div>
-        <span class="pill ${sCls}">${esc(taskStatus(t.status))}</span>
+        <span class="pill ${sCls}" title="2dland 原始状态码 status=${esc(t.status)}${t.code ? ' code=' + esc(t.code) : ''}${t.message ? ' ' + esc(t.message) : ''}">${esc(taskStatus(t))}</span>
         ${t.status === 1000 && t.save_path ? `<button class="icon-btn t-org" data-save="${esc(t.save_path)}" data-name="${esc(name)}" title="整理文件：删广告 + 规范命名">✨</button>` : ''}
         <button class="icon-btn t-del" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="删除此任务">🗑</button>
       </div>`;
@@ -1655,6 +1662,8 @@
         <div class="field"><label>语言</label><input id="tmdb_language" class="input" value="${esc(s.tmdb_language || 'zh-CN')}"></div>
       </div>
       <div class="field"><label>代理服务器</label><input id="tmdb_proxy" class="input" value="${esc(s.tmdb_proxy || '')}" placeholder="如 http://127.0.0.1:7890"></div>
+      <div class="field"><label>标题别名（每行一条：6v名 = TMDB名）</label><textarea id="tmdb_aliases" class="input" rows="4" placeholder="守护星 = 守护你，遇见爱&#10;完美说谎者 = 完美骗子">${esc(s.tmdb_aliases || '')}</textarea></div>
+      <div class="help">6v 的中文片名与 TMDB 词条对不上（译名差异、TMDB 无中文名）导致目录缺年份/匹配失败时，在这里补一条映射。支持 = 、全角冒号分隔，# 开头为注释。</div>
       <div class="row">
         <button class="btn" id="btnTestTmdb">🔌 测试连接</button>
         <span id="tmdbTestResult" class="text-sm muted"></span>
@@ -1767,6 +1776,7 @@
       tmdb_api_key: $('#tmdb_api_key').value.trim(),
       tmdb_proxy: $('#tmdb_proxy').value.trim(),
       tmdb_language: $('#tmdb_language').value.trim() || 'zh-CN',
+      tmdb_aliases: $('#tmdb_aliases') ? $('#tmdb_aliases').value : undefined,
       max_pages: parseInt($('#max_pages').value) || 0,
       base_dir: $('#base_dir').value.trim(),
     };

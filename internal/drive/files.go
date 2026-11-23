@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strings"
+	"sync"
 
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/model"
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/userfile"
@@ -37,6 +39,74 @@ func (c *Client) ListFiles(ctx context.Context, parentPath string) ([]*userfile.
 		}
 	}
 	return all, nil
+}
+
+// FillDirStats 给列表里的目录补齐真实条目数。
+// 2dland 的 list 接口对目录的 files/direcotries 字段经常返回 0（不统计子项），
+// 界面就会显示「0 文件夹 · 0 文件」，用户以为目录是空的。
+// 只补当前层、只补统计为 0 的目录；目录数量过多时整体跳过，避免一次打出几十个请求触发限流。
+func (c *Client) FillDirStats(ctx context.Context, files []*userfile.File) {
+	const (
+		maxFill  = 40
+		parallel = 3
+	)
+	var todo []*userfile.File
+	for _, f := range files {
+		if f.Dir && f.Files == 0 && f.Direcotries == 0 {
+			todo = append(todo, f)
+		}
+	}
+	if len(todo) == 0 || len(todo) > maxFill {
+		return
+	}
+	sem := make(chan struct{}, parallel)
+	var wg sync.WaitGroup
+	for _, f := range todo {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(f *userfile.File) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			kids, err := c.ListFiles(ctx, f.Path)
+			if err != nil {
+				log.Printf("FillDirStats: list %q failed: %v", f.Path, err)
+				return
+			}
+			var nf, nd int64
+			for _, k := range kids {
+				if k.Dir {
+					nd++
+				} else {
+					nf++
+				}
+			}
+			f.Files, f.Direcotries = nf, nd
+		}(f)
+	}
+	wg.Wait()
+}
+
+// removeDirIfEmpty 目录里既没文件也没子目录时把它删掉（进回收站，可恢复）。
+// 只用于整理后残留的空项目目录，不递归、不动有内容的目录。
+func (c *Client) removeDirIfEmpty(ctx context.Context, dirPath string) {
+	dirPath = strings.TrimRight(dirPath, "/")
+	if dirPath == "" || dirPath == "/" {
+		return
+	}
+	kids, err := c.ListFiles(ctx, dirPath)
+	if err != nil || len(kids) > 0 {
+		return
+	}
+	s := c.snap()
+	d, err := s.userfile.Get(ctx, &userfile.File{Path: dirPath})
+	if err != nil || d == nil || d.Identity == "" {
+		return
+	}
+	if err := c.DeleteFiles(ctx, []string{d.Identity}); err != nil {
+		log.Printf("removeDirIfEmpty: delete %q failed: %v", dirPath, err)
+		return
+	}
+	log.Printf("removeDirIfEmpty: removed empty dir %q", dirPath)
 }
 
 // Mkdir 在 parentPath 下创建名为 name 的文件夹，返回创建后的文件信息。

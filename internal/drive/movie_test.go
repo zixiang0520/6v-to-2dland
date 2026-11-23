@@ -1,7 +1,13 @@
 package drive
 
 import (
+	"context"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
+
+	"6v-to-2dland/internal/tmdb"
 
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/userfile"
 )
@@ -66,6 +72,36 @@ func TestParseMovieName(t *testing.T) {
 		{
 			in:    "无年份.1080p.mp4",
 			title: "无年份",
+			qual:  "1080p",
+		},
+		{
+			// 连写标记：BD中英双字 不能留在片名里
+			in:    "玩具总动员4.720p.BD中英双字[66影视www.66Ys.Co].mp4",
+			title: "玩具总动员4",
+			qual:  "720p",
+		},
+		{
+			// 连写语言标记：国英台粤四语
+			in:    "玩具总动员.1080p.国英台粤四语.BD中英双字[最新电影www.66e.cc].mp4",
+			title: "玩具总动员",
+			qual:  "1080p",
+		},
+		{
+			// 幂等：整理器自己加的 -2 后缀不能变成片名的一部分
+			in:    "玩具总动员4 BD中英双字-2.mp4",
+			title: "玩具总动员4",
+		},
+		{
+			// 幂等：分辨率后缀 + 序号也要能还原
+			in:    "玩具总动员4-1080p-2.mp4",
+			title: "玩具总动员4",
+			qual:  "1080p",
+		},
+		{
+			// 片名带空格数字（续集号）不能被当成去重后缀吃掉
+			in:    "Toy Story 2.1999.1080p.mkv",
+			title: "Toy Story 2",
+			year:  "1999",
 			qual:  "1080p",
 		},
 	}
@@ -188,17 +224,17 @@ func TestPickMovieName(t *testing.T) {
 		t.Fatalf("2160p = %q", got)
 	}
 
-	// 无法区分：序号兜底 -2
+	// 无法区分（无分辨率可依）：序号兜底 -2
 	g = &movieGroup{
 		Title: "变形金刚",
 		Year:  "2007",
 		Files: []*userfile.File{
-			file("变形金刚.2007.1080p.A.mkv"),
-			file("变形金刚.2007.1080p.B.mkv"),
+			file("变形金刚.2007.DTS.x264.A.mkv"),
+			file("变形金刚.2007.DTS.x264.B.mkv"),
 		},
 		Names: []movieName{
-			{Title: "变形金刚", Year: "2007", Quality: "1080p"},
-			{Title: "变形金刚", Year: "2007", Quality: "1080p"},
+			{Title: "变形金刚", Year: "2007"},
+			{Title: "变形金刚", Year: "2007"},
 		},
 	}
 	used = map[string]bool{}
@@ -207,6 +243,25 @@ func TestPickMovieName(t *testing.T) {
 	}
 	if got := pickMovieName(g, 1, "变形金刚 (2007)", used); got != "变形金刚 (2007)-2.mkv" {
 		t.Fatalf("second = %q", got)
+	}
+
+	// 分辨率重复（同片两个 1080p 版本）：-1080p / -1080p-2，而不是裸序号
+	g = &movieGroup{
+		Title: "玩具总动员4",
+		Files: []*userfile.File{
+			file("a.mp4"), file("b.mp4"),
+		},
+		Names: []movieName{
+			{Title: "玩具总动员4", Quality: "1080p"},
+			{Title: "玩具总动员4", Quality: "1080p"},
+		},
+	}
+	used = map[string]bool{}
+	if got := pickMovieName(g, 0, "玩具总动员4", used); got != "玩具总动员4-1080p.mp4" {
+		t.Fatalf("dup quality first = %q", got)
+	}
+	if got := pickMovieName(g, 1, "玩具总动员4", used); got != "玩具总动员4-1080p-2.mp4" {
+		t.Fatalf("dup quality second = %q", got)
 	}
 }
 
@@ -267,5 +322,102 @@ func TestParseMovieNameChinesePart(t *testing.T) {
 	}
 	if n.Year != "2003" {
 		t.Fatalf("year = %q", n.Year)
+	}
+}
+
+// 同片多版本（720p/1080p、国英双语/中英双字）必须收敛到同一个目录，
+// 不能每次整理都新建「片名-2/-3/-4」目录。
+func TestGroupMoviesSameMovieMultiVersions(t *testing.T) {
+	videos := []*userfile.File{
+		file("玩具总动员4.1080p.BD中英双字[66影视www.66Ys.Co].mp4"),
+		file("玩具总动员4.1080p.国英双语.BD中英双字[66影视www.66Ys.Co].mp4"),
+		file("玩具总动员4.720p.BD中英双字[66影视www.66Ys.Co].mp4"),
+		file("玩具总动员4.720p.国英双语.BD中英双字[66影视www.66Ys.Co].mp4"),
+	}
+	groups := groupMovies(videos, "玩具总动员四部全")
+	if len(groups) != 1 {
+		t.Fatalf("groups = %d, want 1 (same movie, multi versions)", len(groups))
+	}
+	g := groups[0]
+	if len(g.Files) != 4 {
+		t.Fatalf("files = %d, want 4", len(g.Files))
+	}
+	k := normalizeTitleKey(g.Title)
+	if !strings.HasPrefix(k, "玩具总动员4") || strings.Contains(k, "bd") || strings.Contains(k, "中英双字") {
+		t.Fatalf("parsed title still dirty: %q", g.Title)
+	}
+	used := map[string]bool{}
+	got := make([]string, 0, len(g.Files))
+	for i := range g.Files {
+		got = append(got, pickMovieName(g, i, "玩具总动员4", used))
+	}
+	want := []string{
+		"玩具总动员4-1080p.mp4",
+		"玩具总动员4-1080p-2.mp4",
+		"玩具总动员4-720p.mp4",
+		"玩具总动员4-720p-2.mp4",
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("name[%d] = %q, want %q (all=%v)", i, got[i], want[i], got)
+		}
+	}
+}
+
+// 整理阶段也要向 TMDB 要年份，否则目录只能叫「玩具总动员4」没有 (2019)。
+func TestTmdbDirName(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"玩具总动员4","original_title":"Toy Story 4","release_date":"2019-06-19"}]}`))
+	}))
+	defer srv.Close()
+
+	c := tmdb.NewWithBase("key", "", "zh-CN", srv.URL)
+	if got := tmdbDirName(context.Background(), c, "玩具总动员4", ""); got != "玩具总动员4 (2019)" {
+		t.Fatalf("tmdbDirName = %q, want 玩具总动员4 (2019)", got)
+	}
+	// 未配置 TMDB 时返回空串，由调用方回退本地解析结果
+	if got := tmdbDirName(context.Background(), nil, "玩具总动员4", ""); got != "" {
+		t.Fatalf("nil client = %q, want empty", got)
+	}
+}
+
+func TestYearFromDirName(t *testing.T) {
+	cases := map[string]string{
+		"守护星 (2026)":   "2026",
+		"马登 (2023)":    "2023",
+		"守护星":          "",
+		"已下载":          "",
+		"完美说谎者 (2026)": "2026",
+	}
+	for in, want := range cases {
+		if got := yearFromDirName(in); got != want {
+			t.Fatalf("yearFromDirName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// Keep 组（单片目录）缺年份时由 TMDB 补：「守护星」→「守护星 (2026)」，片名保持 6v 原名。
+func TestKeepGroupYearEnrichment(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// 模拟别名命中：6v 名搜不到，TMDB 词条名不同但年份可取。
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"results":[{"title":"守护你，遇见爱","original_title":"Guarding Stars","release_date":"2026-11-18"}]}`))
+	}))
+	defer srv.Close()
+
+	tc := tmdb.NewWithBase("key", "", "zh-CN", srv.URL)
+	tc.SetAliases(map[string]string{"守护星": "守护你，遇见爱"})
+
+	norm := tmdbDirName(context.Background(), tc, "守护星", "")
+	if norm == "" {
+		t.Fatal("alias should hit")
+	}
+	if y := yearFromDirName(norm); y != "2026" {
+		t.Fatalf("year = %q, want 2026", y)
+	}
+	// 组装后的目录名应保留 6v 原名并补年份
+	if got := sanitize("守护星 (2026)"); got != "守护星 (2026)" {
+		t.Fatalf("final dir = %q", got)
 	}
 }

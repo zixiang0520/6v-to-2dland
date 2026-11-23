@@ -116,7 +116,7 @@ func (s *Server) uiSetup(w http.ResponseWriter, r *http.Request) {
 	}
 	after := s.snapshotConfig()
 	s.drive.UpdateCredentials(after.ClientID, after.ClientSecret)
-	s.drive.UpdateTMDB(after.TmdbAPIKey, after.TmdbProxy, after.TmdbLang)
+	s.drive.UpdateTMDB(after.TmdbAPIKey, after.TmdbProxy, after.TmdbLang, after.TmdbAliases)
 	s.startSession(w)
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
@@ -342,10 +342,21 @@ func (s *Server) settingsGet(w http.ResponseWriter, r *http.Request) {
 		"tmdb_api_key":        c.TmdbAPIKey,
 		"tmdb_proxy":          c.TmdbProxy,
 		"tmdb_language":       c.TmdbLang,
+		"tmdb_aliases":        c.TmdbAliases,
 		"max_pages":           c.MaxPages,
 		"base_dir":            c.BaseDir,
 		"logged_in_2dland":    s.drive.LoggedIn(),
 	})
+}
+
+// aliasesFieldSet 判断请求体里是否带 tmdb_aliases 字段（老前端不传时不能覆盖清空别名表）。
+func aliasesFieldSet(r *http.Request) bool {
+	var probe map[string]json.RawMessage
+	if err := decodeJSON(r, &probe); err != nil {
+		return false
+	}
+	_, ok := probe["tmdb_aliases"]
+	return ok
 }
 
 func (s *Server) settingsPost(w http.ResponseWriter, r *http.Request) {
@@ -356,6 +367,7 @@ func (s *Server) settingsPost(w http.ResponseWriter, r *http.Request) {
 		TmdbAPIKey     string `json:"tmdb_api_key"`
 		TmdbProxy      string `json:"tmdb_proxy"`
 		TmdbLanguage   string `json:"tmdb_language"`
+		TmdbAliases    string `json:"tmdb_aliases"`
 		MaxPages       int    `json:"max_pages"`
 		BaseDir        string `json:"base_dir"`
 	}
@@ -377,6 +389,10 @@ func (s *Server) settingsPost(w http.ResponseWriter, r *http.Request) {
 		if body.TmdbLanguage != "" {
 			c.TmdbLang = body.TmdbLanguage
 		}
+		// 别名表是全文覆盖式字段：前端原样回传即可；nil 区分「未传」与「清空」。
+		if body.TmdbAliases != "" || aliasesFieldSet(r) {
+			c.TmdbAliases = body.TmdbAliases
+		}
 		if body.MaxPages > 0 {
 			c.MaxPages = body.MaxPages
 		}
@@ -393,7 +409,7 @@ func (s *Server) settingsPost(w http.ResponseWriter, r *http.Request) {
 	if credsChanged && after.ClientID != "" {
 		s.drive.UpdateCredentials(after.ClientID, after.ClientSecret)
 	}
-	s.drive.UpdateTMDB(after.TmdbAPIKey, after.TmdbProxy, after.TmdbLang)
+	s.drive.UpdateTMDB(after.TmdbAPIKey, after.TmdbProxy, after.TmdbLang, after.TmdbAliases)
 	s.drive.UpdateBaseDir(after.BaseDir)
 
 	writeJSON(w, http.StatusOK, map[string]any{
@@ -467,6 +483,8 @@ func (s *Server) filesList(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, errResp(err))
 		return
 	}
+	// 2dland 列表接口返回的目录条目数常为 0，补真实统计，避免界面显示「0 文件」误导。
+	s.drive.FillDirStats(r.Context(), files)
 	items := make([]fileItem, 0, len(files))
 	for _, f := range files {
 		items = append(items, fileItem{

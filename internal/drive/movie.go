@@ -10,6 +10,8 @@ import (
 	"strings"
 	"unicode"
 
+	"6v-to-2dland/internal/tmdb"
+
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/userfile"
 )
 
@@ -44,7 +46,25 @@ var (
 
 	// cnPartTokenRe 匹配孤立的中文分盘标记 token：上部/下集/前篇。
 	cnPartTokenRe = regexp.MustCompile(`^(?:上|下|前|后)(?:部|集|篇|编)$`)
+
+	// dupSuffixRe 匹配整理器自己加的序号后缀（-2/-3…）。整理是幂等的：
+	// 第二次整理读到「片名-2.mp4」时必须还原成同一片名，否则每跑一次就多出一层目录。
+	dupSuffixRe = regexp.MustCompile(`[-_]\d{1,2}$`)
+
+	// qualityTailRe 匹配整理器加在片名末尾的分辨率后缀（片名-1080p），同样要能还原。
+	qualityTailRe = regexp.MustCompile(`(?i)[-_ ](?:2160p|1080p|1080i|720p|576p|480p|4k|8k|uhd)$`)
+
+	// langOnlyRe 匹配只由语言/字幕标记组成的 token（国英台粤四语、中英双字、国粤双语…）。
+	// BT 资源里这些标记常和 BD/HD 连写成「BD中英双字」，词典式精确匹配抓不到。
+	langOnlyRe = regexp.MustCompile(`^(?:[国粤英台日韩中法俄]|[一二三四五六七八两多]语|双语|双字|中字|字幕|原声|配音)+$`)
 )
+
+// techSubstrs 是需要从 token 内部剥掉的技术词（长词在前，避免 bluray 被 bd 先吃掉）。
+var techSubstrs = []string{
+	"bluray", "bdrip", "brrip", "webrip", "webdl", "hdtv", "hdrip",
+	"x264", "x265", "h264", "h265", "hevc", "avc", "uhd", "bd", "hd", "web",
+	"高清", "超清", "蓝光", "原盘", "高码", "4k", "8k",
+}
 
 // techWords 是 BT 文件名里的技术/语言/字幕词，解析片名时丢弃。
 var techWords = map[string]bool{
@@ -93,6 +113,10 @@ func parseMovieName(fileName string) movieName {
 	if m := qualityRe.FindStringSubmatch(base); m != nil {
 		n.Quality = normalizeQuality(m[1])
 	}
+	// 整理必须是幂等的：先剥掉整理器自己加的 -2/-3 序号和 -1080p 分辨率后缀，
+	// 否则第二次整理会把它们当成片名的一部分，每跑一次就多出一层「片名-2」目录。
+	base = strings.TrimSpace(dupSuffixRe.ReplaceAllString(strings.TrimSpace(base), ""))
+	base = strings.TrimSpace(qualityTailRe.ReplaceAllString(strings.TrimSpace(base), ""))
 	if m := partRe.FindStringSubmatch(base); m != nil {
 		if v, err := strconv.Atoi(m[1]); err == nil && v > 0 && v < 100 {
 			n.Part = v
@@ -196,7 +220,23 @@ func isTechToken(t string) bool {
 	if qualityRe.MatchString(low) && len(low) <= len("2160p") {
 		return true
 	}
+	// 连写标记：BD中英双字 / 国英台粤四语 —— 剥掉技术词后什么都不剩，或整 token 就是
+	// 语言字幕标记组合（必须含「语/字/幕」以防误杀《中国》《英国病人》这类片名）。
+	if stripTechSubstr(low) == "" {
+		return true
+	}
+	if s := stripTechSubstr(low); langOnlyRe.MatchString(s) && strings.ContainsAny(s, "语字幕") {
+		return true
+	}
 	return false
+}
+
+// stripTechSubstr 从 token 内部剥掉技术词，返回剩余部分。
+func stripTechSubstr(s string) string {
+	for _, w := range techSubstrs {
+		s = strings.ReplaceAll(s, w, "")
+	}
+	return strings.Trim(s, " -_.")
 }
 
 // normalizeTitleKey 生成用于比较的归一化片名：只保留字母、数字、汉字。
@@ -256,7 +296,8 @@ func (g *movieGroup) dirName(titleDir string) string {
 }
 
 // pickMovieName 生成组内第 i 个文件的目标文件名。
-// 单文件 → 「标题 (年份).ext」；同组多文件（多盘/多版本）→ 用 -CDn / -分辨率 / -序号 区分。
+// 单文件 → 「标题 (年份).ext」；同组多文件（多盘/多版本）→ 用 -CDn / -分辨率 区分，
+// 分辨率重复时再追加序号（-1080p / -1080p-2），保证名字自带信息且反复整理可收敛。
 func pickMovieName(g *movieGroup, i int, dirTitle string, used map[string]bool) string {
 	ext := path.Ext(g.Files[i].Name)
 	base := dirTitle
@@ -266,7 +307,7 @@ func pickMovieName(g *movieGroup, i int, dirTitle string, used map[string]bool) 
 		switch {
 		case n.Part > 0 && uniqueParts(g.Names):
 			suffix = fmt.Sprintf("-CD%d", n.Part)
-		case n.Quality != "" && uniqueQualities(g.Names):
+		case n.Quality != "":
 			suffix = "-" + n.Quality
 		}
 	}
@@ -276,7 +317,7 @@ func pickMovieName(g *movieGroup, i int, dirTitle string, used map[string]bool) 
 		return cand
 	}
 	for k := 2; ; k++ {
-		cand = fmt.Sprintf("%s-%d%s", base, k, ext)
+		cand = fmt.Sprintf("%s%s-%d%s", base, suffix, k, ext)
 		if !used[strings.ToLower(cand)] {
 			used[strings.ToLower(cand)] = true
 			return cand
@@ -316,13 +357,42 @@ func uniqueQualities(names []movieName) bool {
 func (c *Client) organizeMovies(ctx context.Context, savePath string, res *OrganizeResult, videos []*userfile.File, titleDir string) []string {
 	groups := groupMovies(videos, titleDir)
 	parentPath := path.Dir(savePath)
+	s := c.snap()
 	var splitDirs []string
 	usedByDir := map[string]map[string]bool{}
+	// Keep 组（整个目录只有一部片、片名与目录一致）也要过一遍 TMDB：
+	// 6v 页面标题常不带年份、或中文名与 TMDB 词条不一致，否则这类目录永远「裸名」。
+	// TMDB 命中后原地把目录与文件改成「片名 (年份)」，仍在本目录内，不算拆分。
+	keepDirTitle := titleDir
+	if len(groups) == 1 && groups[0].Keep && len(groups[0].Files) == len(videos) {
+		g := groups[0]
+		title := g.Title
+		if title == "" {
+			// 文件名解析不出片名时退回目录名（去年份），别浪费 TMDB 这次查询。
+			title = stripYear(titleDir)
+		}
+		// Keep 组（单片目录）只补缺失的年份，不改片名：
+		// 目录名沿用现有叫法（6v 名或用户手动纠正过的名字不能被 TMDB 词条名顶掉，
+		// 如「守护星」↔「守护你，遇见爱」）。目录已带年份则完全跳过——幂等。
+		if stripYear(titleDir) == titleDir {
+			if norm := tmdbDirName(ctx, s.tmdb, title, g.Year); norm != "" {
+				if y := yearFromDirName(norm); y != "" {
+					log.Printf("organizeMovies: keep-group year %q -> %q (tmdb %q)", titleDir, sanitize(title+" ("+y+")"), norm)
+					keepDirTitle = sanitize(title + " (" + y + ")")
+				}
+			}
+		}
+	}
 	for _, g := range groups {
 		dest := savePath
 		dirTitle := titleDir
 		if !g.Keep {
 			dirTitle = g.dirName(titleDir)
+			// 本地解析只拿到片名，年份要靠 TMDB 补；查不到就维持本地结果。
+			if norm := tmdbDirName(ctx, s.tmdb, g.Title, g.Year); norm != "" {
+				log.Printf("organizeMovies: tmdb %q (year %q) -> %q", g.Title, g.Year, norm)
+				dirTitle = norm
+			}
 			if strings.TrimSpace(dirTitle) == "" {
 				dirTitle = titleDir
 			}
@@ -337,6 +407,19 @@ func (c *Client) organizeMovies(ctx context.Context, savePath string, res *Organ
 			dest = p
 			splitDirs = append(splitDirs, p)
 			log.Printf("organizeMovies: split %q -> %q", g.Title, p)
+		}
+		if g.Keep && keepDirTitle != titleDir {
+			// 单片目录规范化：目录改名（2dland Rename 走 identity），文件随之用新标题重命名。
+			dirTitle = keepDirTitle
+			if err := c.renameDir(ctx, savePath, keepDirTitle); err != nil {
+				log.Printf("organizeMovies: rename dir %q -> %q failed: %v", savePath, keepDirTitle, err)
+				dirTitle = titleDir // 目录改名失败就别改文件名，保持目录/文件一致
+			} else {
+				res.Renamed = append(res.Renamed, RenameRecord{Old: path.Base(savePath), New: keepDirTitle})
+				res.ArchivePath = path.Join(parentPath, keepDirTitle)
+				res.SavePath = res.ArchivePath
+				log.Printf("organizeMovies: keep dir renamed %q -> %q", savePath, res.ArchivePath)
+			}
 		}
 		used := usedByDir[dest]
 		if used == nil {
@@ -362,7 +445,69 @@ func (c *Client) organizeMovies(ctx context.Context, savePath string, res *Organ
 			}
 		}
 	}
+	// 视频全部拆到别的目录后，原项目目录会空掉。每推送一次就多一层「0 文件」空壳，
+	// 媒体库里看着像幽灵条目，这里顺手清掉（进回收站，可恢复）。
+	if len(splitDirs) > 0 {
+		c.removeDirIfEmpty(ctx, savePath)
+	}
 	return splitDirs
+}
+
+// renameDir 原地重命名目录（保持位置不变，仅改名字）。
+func (c *Client) renameDir(ctx context.Context, dirPath, newName string) error {
+	s := c.snap()
+	d, err := s.userfile.Get(ctx, &userfile.File{Path: dirPath})
+	if err != nil || d == nil || d.Identity == "" {
+		return fmt.Errorf("查询目录 %q 失败: %w", dirPath, err)
+	}
+	if err := c.Rename(ctx, d.Identity, newName); err != nil {
+		return err
+	}
+	// Rename 后旧 path 缓存会失效，重新 Get 一次确认生效（失败只记日志，不阻断）。
+	if _, err := s.userfile.Get(ctx, &userfile.File{Path: path.Join(path.Dir(dirPath), newName)}); err != nil {
+		log.Printf("renameDir: confirm %q failed: %v", newName, err)
+	}
+	return nil
+}
+
+// yearFromDirName 从「片名 (YYYY)」形态的目录名里取年份；无则空串。
+func yearFromDirName(name string) string {
+	m := yearSuffixRe.FindStringSubmatch(name)
+	if len(m) == 0 {
+		return ""
+	}
+	return strings.TrimSpace(strings.Trim(m[0], "() \t"))
+}
+
+// tmdbDirName 用 TMDB 把解析出的片名规范成「片名 (年份)」。
+// 查不到、匹配不可靠或 TMDB 未配置时返回空串，调用方回退到本地解析结果——
+// 宁可目录名朴素，也不要张冠李戴。
+func tmdbDirName(ctx context.Context, t *tmdb.Client, title, year string) string {
+	if t == nil || strings.TrimSpace(title) == "" {
+		return ""
+	}
+	r, err := t.Best(ctx, title, "movie", year)
+	if err != nil {
+		log.Printf("tmdb: search %q (year %q) failed: %v", title, year, err)
+		return ""
+	}
+	if r == nil && year != "" {
+		// 文件名里的年份常是压制/发布年，对不上就退回不带年份再试一次。
+		if r2, err2 := t.Best(ctx, title, "movie", ""); err2 == nil {
+			r = r2
+		}
+	}
+	if r == nil || r.Title == "" {
+		return ""
+	}
+	y := tmdb.YearFromDate(r.Date)
+	if y == "" {
+		y = year
+	}
+	if y != "" {
+		return sanitize(r.Title + " (" + y + ")")
+	}
+	return sanitize(r.Title)
 }
 
 // ensureDirUnder 在 parentPath 下确保 name 目录存在，返回完整路径。

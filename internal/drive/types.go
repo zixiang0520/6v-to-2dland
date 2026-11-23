@@ -25,4 +25,11 @@ type UserTask struct {
 	BytesTotal     int64   `json:"bytes_total"`
 	BytesProcessed int64   `json:"bytes_processed"`
 	Organized      bool    `json:"organized"`
+	// Code/Message 是 2dland 服务端给的状态补充说明（常为中文），用于在界面上
+	// 解释 status 数字背后的真实含义。
+	Code     int32  `json:"code"`
+	Message  string `json:"message"`
+	CreateTs int64  `json:"create_ts"`
+	UpdateTs int64  `json:"update_ts"`
+	Size     int64  `json:"size"`
 }

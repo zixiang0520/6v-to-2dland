@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/halalcloud/golang-sdk-lite/halalcloud/model"
 	"github.com/halalcloud/golang-sdk-lite/halalcloud/services/userfile"
 )
 
@@ -177,17 +178,28 @@ func normalizePath(apiPath, parentPath, name string) string {
 }
 
 // findDir 在 parentPath 下查找名为 name 的子目录。
+// 必须翻完所有分页：父目录条目多时单页 List 会漏掉已存在的目录，
+// ensureDir 会误判「不存在」而重复创建，最终堆出「片名-2」「片名-3」。
 func findDir(ctx context.Context, uf *userfile.UserFileService, parentPath, name string) (*userfile.File, error) {
-	resp, err := uf.List(ctx, &userfile.FileListRequest{
-		Parent: &userfile.File{Path: parentPath},
-	})
-	if err != nil {
-		return nil, err
-	}
-	for _, f := range resp.Files {
-		if f.Dir && f.Name == name {
-			return f, nil
+	const pageSize = 100
+	token := ""
+	for page := 0; page < 20; page++ {
+		resp, err := uf.List(ctx, &userfile.FileListRequest{
+			Parent:   &userfile.File{Path: parentPath},
+			ListInfo: &model.ScanListRequest{Limit: pageSize, Token: token},
+		})
+		if err != nil {
+			return nil, err
 		}
+		for _, f := range resp.Files {
+			if f.Dir && f.Name == name {
+				return f, nil
+			}
+		}
+		if resp.ListInfo == nil || resp.ListInfo.Token == "" || len(resp.Files) == 0 {
+			return nil, nil
+		}
+		token = resp.ListInfo.Token
 	}
 	return nil, nil
 }
