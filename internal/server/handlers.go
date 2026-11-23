@@ -184,6 +184,7 @@ func (s *Server) magnets(w http.ResponseWriter, r *http.Request) {
 func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Magnets []drive.PushItem `json:"magnets"`
+		Force   bool             `json:"force"` // true = 用户已确认重复，跳过查重直接提交
 	}
 	if err := decodeJSON(r, &body); err != nil {
 		writeJSON(w, http.StatusBadRequest, errResp(err))
@@ -192,6 +193,15 @@ func (s *Server) push(w http.ResponseWriter, r *http.Request) {
 	if len(body.Magnets) == 0 {
 		writeJSON(w, http.StatusBadRequest, errStr("未选择磁力链"))
 		return
+	}
+	// 提交前查重：与 2dland 现有任务按磁力指纹（btih）比对，命中则先让前端确认。
+	// 用户在确认框里选「仍要推送」后带 force=true 重发，此处不再拦截。
+	if !body.Force {
+		if dups, err := s.drive.FindDuplicateTasks(r.Context(), body.Magnets); err == nil && len(dups) > 0 {
+			log.Printf("Push: duplicate detected items=%d hits=%d", len(body.Magnets), len(dups))
+			writeJSON(w, http.StatusOK, map[string]any{"duplicate": true, "duplicates": dups})
+			return
+		}
 	}
 	res, err := s.drive.Push(r.Context(), body.Magnets)
 	if err != nil {

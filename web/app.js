@@ -542,8 +542,8 @@
       if (!items.length) { toast('请勾选要推送的磁力链', 'error'); return; }
       const btn = $('#btnHomeBatchPush');
       btn.disabled = true; btn.textContent = '推送中…';
-      const { ok, data } = await api.post('/api/push', { magnets: items });
-      if (!ok) { toast(data.error || '推送失败', 'error'); btn.disabled = false; syncPushBtn(); return; }
+      const data = await pushMagnets(items);
+      if (!data) { btn.disabled = false; syncPushBtn(); return; }
       close();
       state.homePicked.clear();
       renderHomeGrid();
@@ -669,13 +669,63 @@
     const items = Array.from(state.selected.values());
     const btn = $('#btnPush');
     btn.disabled = true; btn.textContent = '推送中…';
-    const { ok, data } = await api.post('/api/push', { magnets: items });
-    if (!ok) { toast(data.error || '推送失败', 'error'); btn.disabled = false; btn.textContent = '推送到 2dland →'; return; }
+    const data = await pushMagnets(items);
+    if (!data) { btn.disabled = false; btn.textContent = '推送到 2dland →'; return; }
     showPushResult(data);
     state.selected.clear();
     $$('.mag.checked').forEach(el => el.classList.remove('checked'));
     $$('.mag input[type=checkbox]').forEach(cb => cb.checked = false);
     renderSelected();
+  }
+  // 推送公共入口：先正常提交；后端检测到与现有任务重复时弹确认框，
+  // 用户选择「仍要推送」才带 force 重发。返回推送结果 data，取消/失败返回 null。
+  async function pushMagnets(items) {
+    const { ok, data } = await api.post('/api/push', { magnets: items });
+    if (!ok) { toast(data.error || '推送失败', 'error'); return null; }
+    if (data.duplicate && Array.isArray(data.duplicates) && data.duplicates.length) {
+      const go = await confirmDuplicates(data.duplicates);
+      if (!go) return null;
+      const r2 = await api.post('/api/push', { magnets: items, force: true });
+      if (!r2.ok) { toast(r2.data.error || '推送失败', 'error'); return null; }
+      return r2.data;
+    }
+    return data;
+  }
+  // 重复确认模态：列出每个重复资源已存在的任务与状态。
+  function confirmDuplicates(dups) {
+    return new Promise(resolve => {
+      const root = $('#modal-root');
+      const statusText = s => ({ 1000: '已完成', 10: '排队中', 100: '等待下载', 3: '失败', 1: '解析中', 2: '下载中' }[s] || ('状态 ' + s));
+      root.innerHTML = `
+      <div class="modal-mask" id="dupMask">
+        <div class="modal">
+          <div class="modal-head"><h3>⚠ 发现重复任务</h3><button class="icon-btn" id="dupCloseX">✕</button></div>
+          <div class="modal-body">
+            <div class="help mb-12">以下资源的磁力链与 2dland 现有任务相同，提交会产生重复任务。</div>
+            <div style="max-height:320px;overflow:auto">
+              ${dups.map(d => `
+                <div class="task">
+                  <div class="t-name">
+                    <div>${esc(d.name)}</div>
+                    ${(d.existing || []).map(x => `
+                      <div class="muted text-xs">已有：${esc(x.name)} · ${statusText(x.status)}${x.save_path ? ' · ' + esc(x.save_path) : ''}</div>
+                    `).join('')}
+                  </div>
+                </div>`).join('')}
+            </div>
+          </div>
+          <div class="modal-foot">
+            <button class="btn" id="dupCancel">取消</button>
+            <button class="btn danger" id="dupForce">仍要推送</button>
+          </div>
+        </div>
+      </div>`;
+      const done = v => { root.innerHTML = ''; resolve(v); };
+      $('#dupCancel').onclick = () => done(false);
+      $('#dupCloseX').onclick = () => done(false);
+      $('#dupMask').onclick = e => { if (e.target.id === 'dupMask') done(false); };
+      $('#dupForce').onclick = () => done(true);
+    });
   }
   function showPushResult(data) {
     const okN = data.items.filter(x => x.ok).length;
@@ -1372,8 +1422,8 @@
       if (!list.length) { toast('请勾选要推送的磁力链', 'error'); return; }
       const btn = $('#fmPush');
       btn.disabled = true; btn.textContent = '推送中…';
-      const { ok, data } = await api.post('/api/push', { magnets: list });
-      if (!ok) { toast(data.error || '推送失败', 'error'); btn.disabled = false; syncPush(); return; }
+      const data = await pushMagnets(list);
+      if (!data) { btn.disabled = false; syncPush(); return; }
       showPushResult(data);
       chosen.clear();
     };
