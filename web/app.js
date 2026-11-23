@@ -25,6 +25,9 @@
     if (pct > 0 && pct < 100) return '下载中 ' + Math.floor(pct) + '%';
     if (s === 10) return '排队中';
     if (s === 100) return '等待下载';
+    // 110 实测带 code=-300 / message="time out"：2dland 侧取种或排队超时，
+    // 任务不会再有进展（字节 0/0），需要删除重推或换源。
+    if (s === 110) return '排队超时';
     if (s === 0) return '等待中';
     return '状态' + s;
   };
