@@ -852,7 +852,7 @@
         <div class="progress"><span style="width:${pct}%"></span></div>
         <div class="pct">${pct}%</div>
         <span class="pill ${sCls}" title="2dland 原始状态码 status=${esc(t.status)}${t.code ? ' code=' + esc(t.code) : ''}${t.message ? ' ' + esc(t.message) : ''}">${esc(taskStatus(t))}</span>
-        ${t.status === 110 ? `<button class="icon-btn t-retry" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="重试：删除旧任务记录（文件保留）并用原磁力重新提交">↻</button>` : ''}
+        ${t.status === 110 ? `<button class="icon-btn t-retry" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="重试：用原磁力重新提交，成功后删除旧任务记录（文件保留）">↻</button>` : ''}
         ${t.status === 1000 && t.save_path ? `<button class="icon-btn t-org" data-save="${esc(t.save_path)}" data-name="${esc(name)}" title="整理文件：删广告 + 规范命名">✨</button>` : ''}
         <button class="icon-btn t-del" data-id="${esc(t.identity)}" data-name="${esc(name)}" title="删除此任务">🗑</button>
       </div>`;
@@ -877,8 +877,8 @@
     };
     // 单条删除
     $$('.t-del').forEach(b => b.onclick = () => deleteTask(b.dataset.id, b.dataset.name));
-    // 单条重试（仅排队超时任务）
-    $$('.t-retry').forEach(b => b.onclick = () => retryTask(b.dataset.id, b.dataset.name));
+    // 单条重试（仅排队超时任务）；请求期间禁用按钮，服务端另有并发保护。
+    $$('.t-retry').forEach(b => b.onclick = () => retryTask(b.dataset.id, b.dataset.name, b));
     // 单条整理（仅已完成任务）
     $$('.t-org').forEach(b => b.onclick = () => organizeTask(b.dataset.save, b.dataset.name));
     // 翻页
@@ -918,21 +918,30 @@
     toast('已删除任务，下载文件已保留', 'success');
     loadTasks();
   }
-  // retryTask 重试一个排队超时（status 110）的死任务：删旧任务记录（文件保留）+ 原磁力重推。
-  async function retryTask(identity, name) {
-    const r = await confirmDialog({
-      title: '重试任务',
-      message: `重试任务「<b>${esc(name)}</b>」？<br><span class="muted text-xs">将删除旧的超时任务记录（下载文件一律保留），并用原磁力链重新提交。</span>`,
-      confirmText: '重试',
-      danger: false,
-      checkboxLabel: '',
-    });
-    if (!r.ok) return;
-    toast('正在重试：删除旧任务并重新提交…', 'info');
-    const { ok, data } = await api.post('/api/tasks/retry', { identity });
-    if (!ok) { toast(data.error || '重试失败', 'error'); loadTasks(); return; }
-    toast('重试成功，任务已重新提交', 'success');
-    loadTasks();
+  // retryTask 重试一个排队超时（status 110）的死任务：先原磁力重推，成功后删旧任务记录（文件保留）。
+  async function retryTask(identity, name, button) {
+    if (button) button.disabled = true;
+    try {
+      const r = await confirmDialog({
+        title: '重试任务',
+        message: `重试任务「<b>${esc(name)}</b>」？<br><span class="muted text-xs">将用原磁力链重新提交，成功后再删除旧的超时任务记录（下载文件一律保留）。</span>`,
+        confirmText: '重试',
+        danger: false,
+        checkboxLabel: '',
+      });
+      if (!r.ok) return;
+      toast('正在重试：重新提交任务…', 'info');
+      const { ok, data } = await api.post('/api/tasks/retry', { identity });
+      if (!ok) {
+        toast(data.error || '重试失败', 'error');
+        loadTasks();
+        return;
+      }
+      toast('重试成功，任务已重新提交', 'success');
+      loadTasks();
+    } finally {
+      if (button) button.disabled = false;
+    }
   }
   // organizeTask 整理已完成任务的下载文件：删除广告 + 规范化视频文件名，结果用弹窗展示。
   async function organizeTask(savePath, name) {

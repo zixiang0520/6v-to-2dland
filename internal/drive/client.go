@@ -37,6 +37,14 @@ type Client struct {
 	rateLimited    bool // 2dland 返回 429 后置 true，阻止后续推送直到冷却
 	rateLimitUntil time.Time
 
+	// watchers 管理每个任务的轮询取消函数；任务删除或重试替换时及时停止旧轮询。
+	watcherMu sync.Mutex
+	watchers  map[string]*watcherHandle
+
+	// retrying 防止同一任务被并发重试；不同任务之间仍可并行。
+	retryMu  sync.Mutex
+	retrying map[string]struct{}
+
 	// OnOrganize 自动整理（watcher）完成时回调，含失败；上层用它持久化整理记录。
 	// 只覆盖自动整理路径；手动/批量整理由 server handler 直接记录，不走此回调。
 	// 在 server.New 里设置一次，之后只读。

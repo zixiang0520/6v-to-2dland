@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log"
 	"net/http"
 	"os"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -249,8 +251,8 @@ func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
-// taskRetry 重试一个超时/失败任务（典型：status=110 取种超时）：
-// 删除旧任务记录（保留文件）+ 用原磁力按原保存路径重新提交。
+// taskRetry 重试一个 status=110 的排队超时任务：
+// 先用原磁力按原保存路径创建新任务，成功后再删除旧任务记录（保留文件）。
 func (s *Server) taskRetry(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Identity string `json:"identity"`
@@ -259,6 +261,7 @@ func (s *Server) taskRetry(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, errResp(err))
 		return
 	}
+	body.Identity = strings.TrimSpace(body.Identity)
 	if body.Identity == "" {
 		writeJSON(w, http.StatusBadRequest, errStr("缺少 identity"))
 		return
@@ -269,7 +272,20 @@ func (s *Server) taskRetry(w http.ResponseWriter, r *http.Request) {
 	log.Printf("AUDIT: taskRetry identity=%s remote=%s", body.Identity, r.RemoteAddr)
 	ri, err := s.drive.RetryTask(ctx, body.Identity)
 	if err != nil {
-		writeJSON(w, http.StatusInternalServerError, errResp(err))
+		status := http.StatusInternalServerError
+		switch {
+		case errors.Is(err, drive.ErrRetryNotFound):
+			status = http.StatusNotFound
+		case errors.Is(err, drive.ErrRetryInvalidState), errors.Is(err, drive.ErrRetryInProgress):
+			status = http.StatusConflict
+		}
+		resp := map[string]any{"ok": false, "error": err.Error()}
+		if ri != nil {
+			// 重推可能已成功、仅旧任务删除失败；把新任务返回，避免调用方误判状态。
+			resp["item"] = ri
+			resp["partial"] = ri.OK
+		}
+		writeJSON(w, status, resp)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "item": ri})

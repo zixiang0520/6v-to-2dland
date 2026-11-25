@@ -339,6 +339,11 @@ func (c *Client) DeleteTask(ctx context.Context, identities []string, deleteFile
 	}{}
 	err := s.api.Post(ctx, "/v6/offline_task/delete", nil, body, &result)
 	log.Printf("DeleteTask: identities=%d delete_files=%v -> count=%d err=%v", len(identities), deleteFiles, result.Count, err)
+	if err == nil {
+		for _, identity := range identities {
+			c.stopWatcher(identity)
+		}
+	}
 	return err
 }
 
